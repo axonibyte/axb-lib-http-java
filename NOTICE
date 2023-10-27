@@ -1,10 +1,9 @@
-AxB Java RESTful Library
-Copyright (c) 2023 Axonibyte Innovations, LLC
+AxB Java HTTP API Library
+Copyright (c) 2019-2023 Axonibyte Innovations, LLC
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not
-copy, modify, take inspiration from, or otherwise use this software or the files
-herein except in compliance with the License. You may obtain a copy of the
-License at
+Licensed under the Apache License, Version 2.0 (the "License"); you may not copy,
+modify, take inspiration from, or otherwise use this software or the files herein
+except in compliance with the License. You may obtain a copy of the License at
 
   https://www.apache.org/licenses/LICENSE-2.0
 
@@ -12,3 +11,65 @@ Unless required by applicable law or agreed to in writing, software distributed
 under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
+
+===
+
+The Initial Developer of some parts of this software, in particular the build
+environment, is the original author or authors, and is released by Gradle Inc.
+(https://gradle.org).
+
+Gradle
+Copyright (c) 2008-2023 the original author or authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+===
+
+The Initial Developer of some parts of this software, in particular the Shadow
+JAR plugin, is John Engelman.
+
+Gradle-Shadow-Plugin
+Copyright (c) 2013 John Engelman. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+===
+
+The Initial Developer of some parts of this software, in particular the
+underlying Spark web API microframework, is Per Wendel. Please see that
+repository at https://github.com/perwendel/spark for the respective
+NOTICE file with additional dependencies and acknowledgements.
+
+Copyright (c) 2011-2015 Per Wendel. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.

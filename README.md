@@ -1,4 +1,4 @@
-# Axonibyte Java Library Suite - RESTful API
+# Axonibyte Java Library Suite - HTTP API
 
 Copyright (c) 2023 Axonibyte Innovations, LLC. All rights reserved.
 
