@@ -65,7 +65,7 @@ public class APIDriver implements Runnable {
    * 
    * @param port the port by which the front end will be accessible
    * @param allowedOrigins the allowed origins for CORS
-   * @param endpoints an array of endpoints to hook into the API driver
+   * @param endpoints a varargs object of endpoints to hook into the API driver
    */
   private APIDriver(int port, String allowedOrigins, Endpoint... endpoints) {
     this.allowedOrigins = allowedOrigins;
@@ -147,14 +147,15 @@ public class APIDriver implements Runnable {
    * 
    * @param port the listening port
    * @param allowedOrigins the allowed origins for CORS
-   * @return a reference to this FrontEnd object
+   * @param endpoints a varargs object of endpoints to hook into the API driver
+   * @return the newly-operating API driver
    */
-  public static APIDriver build(int port, String allowedOrigins) {
-    APIDriver aPIDriver = new APIDriver(port, allowedOrigins);
-    aPIDriver.thread = new Thread(aPIDriver);
-    aPIDriver.thread.setDaemon(false);
-    aPIDriver.thread.start();
-    return aPIDriver;
+  public static APIDriver build(int port, String allowedOrigins, Endpoint... endpoints) {
+    APIDriver apiDriver = new APIDriver(port, allowedOrigins, endpoints);
+    apiDriver.thread = new Thread(apiDriver);
+    apiDriver.thread.setDaemon(false);
+    apiDriver.thread.start();
+    return apiDriver;
   }
   
 }
