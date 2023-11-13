@@ -24,6 +24,7 @@ import java.util.TreeMap;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
@@ -45,13 +46,15 @@ import org.slf4j.LoggerFactory;
   private static final Deque<Entry<Session, JSONObject>> pending = new ArrayDeque<>();
   
   // so this would be like { Session, { "USER", [ usernameVar... ] }
-  private static final Map<Session, Map<Object, Object>> sessionQualifierMap = new ConcurrentHashMap<>();
+  private static final Map<Session, Map<Object, Set<Object>>> sessionQualifierMap = new ConcurrentHashMap<>();
   
   // so this would be like { "USER", { usernameVar, [ Session... ] } }
   private static final Map<Object, Map<Object, Set<Session>>> qualifierSessionMap = new ConcurrentHashMap<>();
   
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
+
+  public static final Object HOST_QUALIFIER = new Object();
   
   @OnWebSocketConnect public void onConnect(Session session) {
     if(null == instance) {
@@ -63,6 +66,8 @@ import org.slf4j.LoggerFactory;
     String host = session.getRemoteAddress().getHostString();
     int port = session.getRemoteAddress().getPort();
     logger.info("WebSocket connect from {}:{}", host, port);
+
+    subscribe(HOST_QUALIFIER, session.getRemoteAddress().getHostString(), session);
     
     if(!sessionQualifierMap.containsKey(session))
       sessionQualifierMap.put(session, new ConcurrentHashMap<>());
@@ -73,16 +78,18 @@ import org.slf4j.LoggerFactory;
     int port = session.getRemoteAddress().getPort();
     
     logger.info("WebSocket disconnect from {}:{}", host, port);
-    
-    Map<Object, Object> qualifiers = sessionQualifierMap.get(session);
+
+    var qualifiers = sessionQualifierMap.get(session);
     for(var qualifier : qualifiers.entrySet()) {
-      var qualifierSessions = qualifierSessionMap.get(qualifier.getKey());
-      if(null != qualifierSessions && qualifierSessions.containsKey(qualifier.getValue())) {
-        qualifierSessions.remove(qualifier.getValue());
-        if(qualifierSessions.isEmpty())
-          qualifierSessionMap.remove(qualifier.getKey());
+      for(var val : qualifier.getValue()) {
+        qualifierSessionMap.get(qualifier.getKey()).get(val).remove(session);
+        if(qualifierSessionMap.get(qualifier.getKey()).get(val).isEmpty())
+          qualifierSessionMap.get(qualifier.getKey()).remove(val);
       }
+      if(qualifierSessionMap.get(qualifier.getKey()).isEmpty())
+        qualifierSessionMap.remove(qualifier.getKey());
     }
+    sessionQualifierMap.remove(session);
     
   }
   
@@ -166,6 +173,49 @@ import org.slf4j.LoggerFactory;
       for(var session : sessions)
         pending.addLast(new SimpleEntry<>(session, message));
       pending.notifyAll();
+    }
+  }
+
+  /**
+   * Subscribes a session to channels scoped to particular qualifiers.
+   *
+   * @param qualifier the qualifier category
+   * @param value the value of the qualifier
+   * @param session the websocket session
+   */
+  public static void subscribe(Object qualifier, Object value, Session session) {
+    if(!sessionQualifierMap.containsKey(session))
+      sessionQualifierMap.put(session, new ConcurrentHashMap<>());
+    if(!sessionQualifierMap.get(session).containsKey(qualifier))
+      sessionQualifierMap.get(session).put(qualifier, new CopyOnWriteArraySet<>());
+    if(!sessionQualifierMap.get(session).get(qualifier).contains(value))
+      sessionQualifierMap.get(session).get(qualifier).add(value);
+  }
+
+  /**
+   * Unsubscribes a session from a particular channel (defined by qualifiers).
+   *
+   * @param qualifier the qualifier category
+   * @param value the value of the qualifier
+   * @param session the websocket session
+   */
+  public static void unsubscribe(Object qualifier, Object value, Session session) {
+    if(sessionQualifierMap.containsKey(session)
+        && sessionQualifierMap.get(session).containsKey(qualifier)
+        && sessionQualifierMap.get(session).get(qualifier).remove(value)
+        && sessionQualifierMap.get(session).get(qualifier).isEmpty()) {
+      sessionQualifierMap.get(session).remove(qualifier);
+      if(sessionQualifierMap.get(session).isEmpty())
+        sessionQualifierMap.remove(session);
+    }
+
+    if(qualifierSessionMap.containsKey(qualifier)
+        && qualifierSessionMap.get(qualifier).containsKey(value)
+        && qualifierSessionMap.get(qualifier).get(value).remove(session)
+        && qualifierSessionMap.get(qualifier).get(value).isEmpty()) {
+      qualifierSessionMap.get(qualifier).remove(value);
+      if(qualifierSessionMap.get(qualifier).isEmpty())
+        qualifierSessionMap.remove(qualifier);
     }
   }
 
