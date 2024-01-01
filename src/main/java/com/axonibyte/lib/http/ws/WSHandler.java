@@ -100,12 +100,12 @@ import org.slf4j.LoggerFactory;
     try {
       JSONObject request = new JSONObject(message.strip());
       String action = request.getString("action");
-      WSAction wsa = actions.get(request.getString("action"));
       
       if(null == action) {
         logger.warn("Bad action supplied: {}", action);
         return;
       }
+      WSAction wsa = actions.get(action.toLowerCase());
       JSONObject response = wsa.onMessage(session, request);
       
       if(null == response) return;
@@ -116,6 +116,7 @@ import org.slf4j.LoggerFactory;
       
     } catch(Exception e) {
       logger.error("Exception of type {} caused by {}:{}.", e.getClass().getName(), host, port);
+      e.printStackTrace();
     }
   }
   
@@ -209,7 +210,7 @@ import org.slf4j.LoggerFactory;
    */
   public static void putAction(WSAction action) {
     logger.info("Registering WebSocket action {}", action.getAction());
-    actions.put(action.getAction(), action);
+    actions.put(action.getAction().toLowerCase(), action);
   }
 
   private static class WSDispatcher implements Runnable {
