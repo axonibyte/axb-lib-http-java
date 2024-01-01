@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
  *
  * @author Caleb L. Power <cpower@axonibyte.com>
  */
-@WebSocket public class WSHandler implements Runnable {
+@WebSocket public class WSHandler {
   
   private static final Map<String, WSAction> actions = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
   private static final Deque<Entry<Session, JSONObject>> pending = new ArrayDeque<>();
@@ -58,8 +58,8 @@ import org.slf4j.LoggerFactory;
   
   @OnWebSocketConnect public void onConnect(Session session) {
     if(null == instance) {
-      instance = new Thread(this);
-      instance.setDaemon(false);
+      instance = new Thread(new WSDispatcher());
+      instance.setDaemon(true);
       instance.start();
     }
     
@@ -95,14 +95,18 @@ import org.slf4j.LoggerFactory;
   @OnWebSocketMessage public void onMessage(Session session, String message) {
     String host = session.getRemoteAddress().getHostString();
     int port = session.getRemoteAddress().getPort();
-    logger.info("WebSocket message received from {}:{}: \"{}\"", host, port, message);
+    logger.info("WebSocket message received from {}:{}: \"{}\"", host, port, message.strip());
     
     try {
-      JSONObject request = new JSONObject(message);
-      WSAction action = actions.get(request.getString("action"));
+      JSONObject request = new JSONObject(message.strip());
+      String action = request.getString("action");
+      WSAction wsa = actions.get(request.getString("action"));
       
-      if(null == action) return;
-      JSONObject response = action.onMessage(session, request);
+      if(null == action) {
+        logger.warn("Bad action supplied: {}", action);
+        return;
+      }
+      JSONObject response = wsa.onMessage(session, request);
       
       if(null == response) return;
       synchronized(pending) {
@@ -112,28 +116,6 @@ import org.slf4j.LoggerFactory;
       
     } catch(Exception e) {
       logger.error("Exception of type {} caused by {}:{}.", e.getClass().getName(), host, port);
-    }
-  }
-  
-  @Override public void run() {
-    try {
-      while(!instance.isInterrupted()) {
-        Entry<Session, JSONObject> entry = null;
-        
-        synchronized(pending) {
-          while(pending.isEmpty()) pending.wait();
-          entry = pending.pop();
-        }
-        
-        try {
-          entry.getKey().getRemote().sendString(entry.getValue().toString());
-        } catch(IOException e) {
-          logger.error(
-              "Some error occurred whilst processing the outgoing message: {}",
-              null == e.getMessage() ? "no further info available" : e.getMessage());
-        }
-      }
-    } catch(InterruptedException e) {
     }
   }
   
@@ -228,6 +210,31 @@ import org.slf4j.LoggerFactory;
   public static void putAction(WSAction action) {
     logger.info("Registering WebSocket action {}", action.getAction());
     actions.put(action.getAction(), action);
+  }
+
+  private static class WSDispatcher implements Runnable {
+
+    @Override public void run() {
+      try {
+        while(!instance.isInterrupted()) {
+          Entry<Session, JSONObject> entry = null;
+
+          synchronized(pending) {
+            while(pending.isEmpty()) pending.wait();
+            entry = pending.pop();
+          }
+        
+          try {
+            entry.getKey().getRemote().sendString(entry.getValue().toString());
+          } catch(IOException e) {
+            logger.error(
+                "Some error occurred whilst processing the outgoing message: {}",
+                null == e.getMessage() ? "no further info available" : e.getMessage());
+          }
+        }
+      } catch(InterruptedException e) { }
+    }
+    
   }
   
 }
