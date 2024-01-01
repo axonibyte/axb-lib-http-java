@@ -183,12 +183,13 @@ import org.slf4j.LoggerFactory;
    * @param session the websocket session
    */
   public static void subscribe(Object category, Object value, Session session) {
-    if(!sessionCategoryMap.containsKey(session))
-      sessionCategoryMap.put(session, new ConcurrentHashMap<>());
-    if(!sessionCategoryMap.get(session).containsKey(category))
-      sessionCategoryMap.get(session).put(category, new CopyOnWriteArraySet<>());
-    if(!sessionCategoryMap.get(session).get(category).contains(value))
-      sessionCategoryMap.get(session).get(category).add(value);
+    sessionCategoryMap.putIfAbsent(session, new ConcurrentHashMap<>());
+    sessionCategoryMap.get(session).putIfAbsent(category, new CopyOnWriteArraySet<>());
+    sessionCategoryMap.get(session).get(category).add(value);
+
+    categorySessionMap.putIfAbsent(category, new ConcurrentHashMap<>());
+    categorySessionMap.get(category).putIfAbsent(value, new CopyOnWriteArraySet<>());
+    categorySessionMap.get(category).get(value).add(session);
   }
 
   /**
