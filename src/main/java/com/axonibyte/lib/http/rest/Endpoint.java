@@ -69,7 +69,7 @@ public abstract class Endpoint {
         methodBldr.append(methods[i].name());
         if(i < methods.length - 1) methodBldr.append(", ");
       }
-      logger.debug("Loaded route {} with HTTP method(s) {}", route, methodBldr.toString());
+      logger.info("Loaded route {} with HTTP method(s) {}", route, methodBldr.toString());
     }
   }
   

@@ -96,7 +96,7 @@ import org.slf4j.LoggerFactory;
   @OnWebSocketMessage public void onMessage(Session session, String message) {
     String host = session.getRemoteAddress().getHostString();
     int port = session.getRemoteAddress().getPort();
-    logger.debug("WebSocket message received from {}:{}: \"{}\"", host, port, message);
+    logger.info("WebSocket message received from {}:{}: \"{}\"", host, port, message);
     
     try {
       JSONObject request = new JSONObject(message);
@@ -145,7 +145,7 @@ import org.slf4j.LoggerFactory;
    */
   public static void dispatch(JSONObject message) {
     var sessions = sessionQualifierMap.keySet();
-    logger.debug("Queueing message for broadcast: {}", message.toString());
+    logger.info("Queueing message for broadcast: {}", message.toString());
     synchronized(pending) {
       for(var session : sessions)
         pending.addLast(new SimpleEntry<>(session, message));
@@ -168,7 +168,7 @@ import org.slf4j.LoggerFactory;
     var sessions = sessionMap.get(value);
     if(null == sessions) return;
     
-    logger.debug("Queueing message for dispatch: {}", message.toString());
+    logger.info("Queueing message for dispatch: {}", message.toString());
     synchronized(pending) {
       for(var session : sessions)
         pending.addLast(new SimpleEntry<>(session, message));
@@ -226,6 +226,7 @@ import org.slf4j.LoggerFactory;
    * @param the {@link WSAction} to insert into the workflow
    */
   public static void putAction(WSAction action) {
+    logger.info("Registering WebSocket action {}", action.getAction());
     actions.put(action.getAction(), action);
   }
   

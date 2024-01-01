@@ -43,9 +43,9 @@ public class APIDriver implements Runnable {
 
   private static final AtomicReference<APIDriver> instance = new AtomicReference<>();
   private static final String RESPONDER_STATIC_FOLDER = ".";
-  private static final String WEBSOCKET_ROUTE = "/v1/stream";
 
   private final Logger logger = LoggerFactory.getLogger(APIDriver.class);
+  private final String wsRoute;
 
   public static APIDriver getInstance() {
     return instance.get();
@@ -60,17 +60,15 @@ public class APIDriver implements Runnable {
   private String allowedOrigins = null; // the allowed origins for CORS
   private Thread thread = null; // the thread to run the frontend
   
-  /**
-   * Opens the specified external port so as to launch the front end.
-   * 
-   * @param port the port by which the front end will be accessible
-   * @param allowedOrigins the allowed origins for CORS
-   * @param endpoints a varargs object of endpoints to hook into the API driver
-   */
-  private APIDriver(int port, String allowedOrigins, Endpoint... endpoints) {
+  private APIDriver(int port, String allowedOrigins, String wsRoute, Endpoint... endpoints) {
     this.allowedOrigins = allowedOrigins;
     this.port = port;
     this.endpoints = endpoints;
+    if(null == wsRoute)
+      this.wsRoute = null;
+    else if(wsRoute.contains(" "))
+      throw new RuntimeException("WebSocket endpoint may not contain whitsapces.");
+    else this.wsRoute = (wsRoute.charAt(0) == '/' ? "" : "/") + wsRoute;
     
     staticFiles.location(RESPONDER_STATIC_FOLDER); // relative to the root of the classpath
   }
@@ -79,7 +77,8 @@ public class APIDriver implements Runnable {
    * Runs the front end in a separate thread so that it can be halted externally.
    */
   @Override public void run() {
-    webSocket("/stream", WSHandler.class); // initialize websocket
+    if(null != wsRoute)
+      webSocket(wsRoute, WSHandler.class);
 
     logger.info("Exposing API on port {}.", port);
     port(port);
@@ -113,7 +112,7 @@ public class APIDriver implements Runnable {
     
     // this is a patch because the WebSocket route overrides Spark.notFound
     final Route route = (req, res) -> {
-      if(!req.raw().getPathInfo().equals(WEBSOCKET_ROUTE)) {
+      if(null != wsRoute && !req.raw().getPathInfo().equals(wsRoute)) {
         logger.info(
             "User at {} attempted to hit nonexistent endpoint {} {}",
             req.ip(),
@@ -147,11 +146,12 @@ public class APIDriver implements Runnable {
    * 
    * @param port the listening port
    * @param allowedOrigins the allowed origins for CORS
+   * @param wsRoute the WebSocket endpoint or {@code null} to disable WebSockets
    * @param endpoints a varargs object of endpoints to hook into the API driver
    * @return the newly-operating API driver
    */
-  public static APIDriver build(int port, String allowedOrigins, Endpoint... endpoints) {
-    APIDriver apiDriver = new APIDriver(port, allowedOrigins, endpoints);
+  public static APIDriver build(int port, String allowedOrigins, String wsRoute, Endpoint... endpoints) {
+    APIDriver apiDriver = new APIDriver(port, allowedOrigins, wsRoute, endpoints);
     apiDriver.thread = new Thread(apiDriver);
     apiDriver.thread.setDaemon(false);
     apiDriver.thread.start();
