@@ -46,15 +46,15 @@ import org.slf4j.LoggerFactory;
   private static final Deque<Entry<Session, JSONObject>> pending = new ArrayDeque<>();
   
   // so this would be like { Session, { "USER", [ usernameVar... ] }
-  private static final Map<Session, Map<Object, Set<Object>>> sessionQualifierMap = new ConcurrentHashMap<>();
+  private static final Map<Session, Map<Object, Set<Object>>> sessionCategoryMap = new ConcurrentHashMap<>();
   
   // so this would be like { "USER", { usernameVar, [ Session... ] } }
-  private static final Map<Object, Map<Object, Set<Session>>> qualifierSessionMap = new ConcurrentHashMap<>();
+  private static final Map<Object, Map<Object, Set<Session>>> categorySessionMap = new ConcurrentHashMap<>();
   
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
 
-  public static final Object HOST_QUALIFIER = new Object();
+  public static final Object HOST_CATEGORY = new Object();
   
   @OnWebSocketConnect public void onConnect(Session session) {
     if(null == instance) {
@@ -67,10 +67,7 @@ import org.slf4j.LoggerFactory;
     int port = session.getRemoteAddress().getPort();
     logger.info("WebSocket connect from {}:{}", host, port);
 
-    subscribe(HOST_QUALIFIER, session.getRemoteAddress().getHostString(), session);
-    
-    if(!sessionQualifierMap.containsKey(session))
-      sessionQualifierMap.put(session, new ConcurrentHashMap<>());
+    subscribe(HOST_CATEGORY, session.getRemoteAddress().getHostString(), session);
   }
   
   @OnWebSocketClose public void onDisconnect(Session session, int statusCode, String reason) {
@@ -79,18 +76,20 @@ import org.slf4j.LoggerFactory;
     
     logger.info("WebSocket disconnect from {}:{}", host, port);
 
-    var qualifiers = sessionQualifierMap.get(session);
-    for(var qualifier : qualifiers.entrySet()) {
-      for(var val : qualifier.getValue()) {
-        qualifierSessionMap.get(qualifier.getKey()).get(val).remove(session);
-        if(qualifierSessionMap.get(qualifier.getKey()).get(val).isEmpty())
-          qualifierSessionMap.get(qualifier.getKey()).remove(val);
+    var sessionCategories = sessionCategoryMap.get(session);
+    for(var categoryMap : sessionCategories.entrySet()) {
+      var category = categoryMap.getKey();
+      for(var categoryVal : categoryMap.getValue()) {
+        var sessionMap = categorySessionMap.get(category);
+        sessionMap.get(categoryVal).remove(session);
+        if(sessionMap.get(categoryVal).isEmpty())
+          sessionMap.remove(categoryVal);
       }
-      if(qualifierSessionMap.get(qualifier.getKey()).isEmpty())
-        qualifierSessionMap.remove(qualifier.getKey());
+      if(categorySessionMap.get(category).isEmpty())
+        categorySessionMap.remove(category);
     }
-    sessionQualifierMap.remove(session);
     
+    sessionCategoryMap.remove(session);
   }
   
   @OnWebSocketMessage public void onMessage(Session session, String message) {
@@ -144,7 +143,7 @@ import org.slf4j.LoggerFactory;
    * @param message the message to be sent
    */
   public static void dispatch(JSONObject message) {
-    var sessions = sessionQualifierMap.keySet();
+    var sessions = sessionCategoryMap.keySet();
     logger.info("Queueing message for broadcast: {}", message.toString());
     synchronized(pending) {
       for(var session : sessions)
@@ -155,14 +154,14 @@ import org.slf4j.LoggerFactory;
   
   /**
    * Dispatches a message to a session or set of sessions scoped by some
-   * qualifier and its respective value.
+   * category and its respective value.
    *
-   * @param qualifier the category that the value is associated with
-   * @param value the value associated with the qualifier
+   * @param category the category that the value is associated with
+   * @param value the value associated with the category
    * @param message the message that needs to be sent
    */
-  public static void dispatch(Object qualifier, Object value, JSONObject message) {
-    var sessionMap = qualifierSessionMap.get(qualifier);
+  public static void dispatch(Object category, Object value, JSONObject message) {
+    var sessionMap = categorySessionMap.get(category);
     if(null == sessionMap) return;
     
     var sessions = sessionMap.get(value);
@@ -177,45 +176,45 @@ import org.slf4j.LoggerFactory;
   }
 
   /**
-   * Subscribes a session to channels scoped to particular qualifiers.
+   * Subscribes a session to channels scoped to particular categories.
    *
-   * @param qualifier the qualifier category
-   * @param value the value of the qualifier
+   * @param category the category
+   * @param value the value of the category
    * @param session the websocket session
    */
-  public static void subscribe(Object qualifier, Object value, Session session) {
-    if(!sessionQualifierMap.containsKey(session))
-      sessionQualifierMap.put(session, new ConcurrentHashMap<>());
-    if(!sessionQualifierMap.get(session).containsKey(qualifier))
-      sessionQualifierMap.get(session).put(qualifier, new CopyOnWriteArraySet<>());
-    if(!sessionQualifierMap.get(session).get(qualifier).contains(value))
-      sessionQualifierMap.get(session).get(qualifier).add(value);
+  public static void subscribe(Object category, Object value, Session session) {
+    if(!sessionCategoryMap.containsKey(session))
+      sessionCategoryMap.put(session, new ConcurrentHashMap<>());
+    if(!sessionCategoryMap.get(session).containsKey(category))
+      sessionCategoryMap.get(session).put(category, new CopyOnWriteArraySet<>());
+    if(!sessionCategoryMap.get(session).get(category).contains(value))
+      sessionCategoryMap.get(session).get(category).add(value);
   }
 
   /**
-   * Unsubscribes a session from a particular channel (defined by qualifiers).
+   * Unsubscribes a session from a particular channel (defined by categories).
    *
-   * @param qualifier the qualifier category
-   * @param value the value of the qualifier
+   * @param category the category
+   * @param value the value of the category
    * @param session the websocket session
    */
-  public static void unsubscribe(Object qualifier, Object value, Session session) {
-    if(sessionQualifierMap.containsKey(session)
-        && sessionQualifierMap.get(session).containsKey(qualifier)
-        && sessionQualifierMap.get(session).get(qualifier).remove(value)
-        && sessionQualifierMap.get(session).get(qualifier).isEmpty()) {
-      sessionQualifierMap.get(session).remove(qualifier);
-      if(sessionQualifierMap.get(session).isEmpty())
-        sessionQualifierMap.remove(session);
+  public static void unsubscribe(Object category, Object value, Session session) {
+    if(sessionCategoryMap.containsKey(session)
+        && sessionCategoryMap.get(session).containsKey(category)
+        && sessionCategoryMap.get(session).get(category).remove(value)
+        && sessionCategoryMap.get(session).get(category).isEmpty()) {
+      sessionCategoryMap.get(session).remove(category);
+      if(sessionCategoryMap.get(session).isEmpty())
+        sessionCategoryMap.remove(session);
     }
 
-    if(qualifierSessionMap.containsKey(qualifier)
-        && qualifierSessionMap.get(qualifier).containsKey(value)
-        && qualifierSessionMap.get(qualifier).get(value).remove(session)
-        && qualifierSessionMap.get(qualifier).get(value).isEmpty()) {
-      qualifierSessionMap.get(qualifier).remove(value);
-      if(qualifierSessionMap.get(qualifier).isEmpty())
-        qualifierSessionMap.remove(qualifier);
+    if(categorySessionMap.containsKey(category)
+        && categorySessionMap.get(category).containsKey(value)
+        && categorySessionMap.get(category).get(value).remove(session)
+        && categorySessionMap.get(category).get(value).isEmpty()) {
+      categorySessionMap.get(category).remove(value);
+      if(categorySessionMap.get(category).isEmpty())
+        categorySessionMap.remove(category);
     }
   }
 
