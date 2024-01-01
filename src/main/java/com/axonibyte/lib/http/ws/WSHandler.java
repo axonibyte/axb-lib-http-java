@@ -100,12 +100,12 @@ import org.slf4j.LoggerFactory;
     try {
       JSONObject request = new JSONObject(message.strip());
       String action = request.getString("action");
-      
-      if(null == action) {
+      WSAction wsa = actions.get(action.toLowerCase());      
+      if(null == wsa) {
         logger.warn("Bad action supplied: {}", action);
         return;
       }
-      WSAction wsa = actions.get(action.toLowerCase());
+
       JSONObject response = wsa.onMessage(session, request);
       
       if(null == response) return;
