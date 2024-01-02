@@ -46,15 +46,15 @@ import org.slf4j.LoggerFactory;
   private static final Deque<Entry<Session, JSONObject>> pending = new ArrayDeque<>();
   
   // so this would be like { Session, { "USER", [ usernameVar... ] }
-  private static final Map<Session, Map<Object, Set<Object>>> sessionCategoryMap = new ConcurrentHashMap<>();
+  private static final Map<Session, Map<Object, Set<Object>>> sessionContextMap = new ConcurrentHashMap<>();
   
   // so this would be like { "USER", { usernameVar, [ Session... ] } }
-  private static final Map<Object, Map<Object, Set<Session>>> categorySessionMap = new ConcurrentHashMap<>();
+  private static final Map<Object, Map<Object, Set<Session>>> contextSessionMap = new ConcurrentHashMap<>();
   
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
 
-  public static final Object HOST_CATEGORY = new Object();
+  public static final Object HOST_CONTEXT = new Object();
   
   @OnWebSocketConnect public void onConnect(Session session) {
     if(null == instance) {
@@ -67,7 +67,7 @@ import org.slf4j.LoggerFactory;
     int port = session.getRemoteAddress().getPort();
     logger.info("WebSocket connect from {}:{}", host, port);
 
-    subscribe(HOST_CATEGORY, session.getRemoteAddress().getHostString(), session);
+    subscribe(HOST_CONTEXT, session.getRemoteAddress().getHostString(), session);
   }
   
   @OnWebSocketClose public void onDisconnect(Session session, int statusCode, String reason) {
@@ -76,20 +76,20 @@ import org.slf4j.LoggerFactory;
     
     logger.info("WebSocket disconnect from {}:{}", host, port);
 
-    var sessionCategories = sessionCategoryMap.get(session);
-    for(var categoryMap : sessionCategories.entrySet()) {
-      var category = categoryMap.getKey();
-      for(var categoryVal : categoryMap.getValue()) {
-        var sessionMap = categorySessionMap.get(category);
-        sessionMap.get(categoryVal).remove(session);
-        if(sessionMap.get(categoryVal).isEmpty())
-          sessionMap.remove(categoryVal);
+    var sessionContexts = sessionContextMap.get(session);
+    for(var contextMap : sessionContexts.entrySet()) {
+      var context = contextMap.getKey();
+      for(var contextVal : contextMap.getValue()) {
+        var sessionMap = contextSessionMap.get(context);
+        sessionMap.get(contextVal).remove(session);
+        if(sessionMap.get(contextVal).isEmpty())
+          sessionMap.remove(contextVal);
       }
-      if(categorySessionMap.get(category).isEmpty())
-        categorySessionMap.remove(category);
+      if(contextSessionMap.get(context).isEmpty())
+        contextSessionMap.remove(context);
     }
     
-    sessionCategoryMap.remove(session);
+    sessionContextMap.remove(session);
   }
   
   @OnWebSocketMessage public void onMessage(Session session, String message) {
@@ -126,7 +126,7 @@ import org.slf4j.LoggerFactory;
    * @param message the message to be sent
    */
   public static void dispatch(JSONObject message) {
-    var sessions = sessionCategoryMap.keySet();
+    var sessions = sessionContextMap.keySet();
     logger.info("Queueing message for broadcast: {}", message.toString());
     synchronized(pending) {
       for(var session : sessions)
@@ -137,14 +137,14 @@ import org.slf4j.LoggerFactory;
   
   /**
    * Dispatches a message to a session or set of sessions scoped by some
-   * category and its respective value.
+   * context and its respective value.
    *
-   * @param category the category that the value is associated with
-   * @param value the value associated with the category
+   * @param context the context that the value is associated with
+   * @param value the value associated with the context
    * @param message the message that needs to be sent
    */
-  public static void dispatch(Object category, Object value, JSONObject message) {
-    var sessionMap = categorySessionMap.get(category);
+  public static void dispatch(Object context, Object value, JSONObject message) {
+    var sessionMap = contextSessionMap.get(context);
     if(null == sessionMap) return;
     
     var sessions = sessionMap.get(value);
@@ -159,46 +159,46 @@ import org.slf4j.LoggerFactory;
   }
 
   /**
-   * Subscribes a session to channels scoped to particular categories.
+   * Subscribes a session to channels scoped to a particular context.
    *
-   * @param category the category
-   * @param value the value of the category
+   * @param context the context
+   * @param value the value of the context
    * @param session the websocket session
    */
-  public static void subscribe(Object category, Object value, Session session) {
-    sessionCategoryMap.putIfAbsent(session, new ConcurrentHashMap<>());
-    sessionCategoryMap.get(session).putIfAbsent(category, new CopyOnWriteArraySet<>());
-    sessionCategoryMap.get(session).get(category).add(value);
+  public static void subscribe(Object context, Object value, Session session) {
+    sessionContextMap.putIfAbsent(session, new ConcurrentHashMap<>());
+    sessionContextMap.get(session).putIfAbsent(context, new CopyOnWriteArraySet<>());
+    sessionContextMap.get(session).get(context).add(value);
 
-    categorySessionMap.putIfAbsent(category, new ConcurrentHashMap<>());
-    categorySessionMap.get(category).putIfAbsent(value, new CopyOnWriteArraySet<>());
-    categorySessionMap.get(category).get(value).add(session);
+    contextSessionMap.putIfAbsent(context, new ConcurrentHashMap<>());
+    contextSessionMap.get(context).putIfAbsent(value, new CopyOnWriteArraySet<>());
+    contextSessionMap.get(context).get(value).add(session);
   }
 
   /**
-   * Unsubscribes a session from a particular channel (defined by categories).
+   * Unsubscribes a session from a particular channel (defined by context).
    *
-   * @param category the category
-   * @param value the value of the category
+   * @param context the context
+   * @param value the value of the context
    * @param session the websocket session
    */
-  public static void unsubscribe(Object category, Object value, Session session) {
-    if(sessionCategoryMap.containsKey(session)
-        && sessionCategoryMap.get(session).containsKey(category)
-        && sessionCategoryMap.get(session).get(category).remove(value)
-        && sessionCategoryMap.get(session).get(category).isEmpty()) {
-      sessionCategoryMap.get(session).remove(category);
-      if(sessionCategoryMap.get(session).isEmpty())
-        sessionCategoryMap.remove(session);
+  public static void unsubscribe(Object context, Object value, Session session) {
+    if(sessionContextMap.containsKey(session)
+        && sessionContextMap.get(session).containsKey(context)
+        && sessionContextMap.get(session).get(context).remove(value)
+        && sessionContextMap.get(session).get(context).isEmpty()) {
+      sessionContextMap.get(session).remove(context);
+      if(sessionContextMap.get(session).isEmpty())
+        sessionContextMap.remove(session);
     }
 
-    if(categorySessionMap.containsKey(category)
-        && categorySessionMap.get(category).containsKey(value)
-        && categorySessionMap.get(category).get(value).remove(session)
-        && categorySessionMap.get(category).get(value).isEmpty()) {
-      categorySessionMap.get(category).remove(value);
-      if(categorySessionMap.get(category).isEmpty())
-        categorySessionMap.remove(category);
+    if(contextSessionMap.containsKey(context)
+        && contextSessionMap.get(context).containsKey(value)
+        && contextSessionMap.get(context).get(value).remove(session)
+        && contextSessionMap.get(context).get(value).isEmpty()) {
+      contextSessionMap.get(context).remove(value);
+      if(contextSessionMap.get(context).isEmpty())
+        contextSessionMap.remove(context);
     }
   }
 
