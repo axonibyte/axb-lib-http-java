@@ -15,16 +15,20 @@
  */
 package com.axonibyte.lib.http.ws;
 
+import com.axonibyte.lib.wildcard.Pattern;
+import com.axonibyte.lib.wildcard.PatternedMap;
+import com.axonibyte.lib.wildcard.PatternedSet;
+
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
@@ -46,10 +50,12 @@ import org.slf4j.LoggerFactory;
   private static final Deque<Entry<Session, JSONObject>> pending = new ArrayDeque<>();
   
   // so this would be like { Session, { "USER", [ usernameVar... ] }
-  private static final Map<Session, Map<Object, Set<Object>>> sessionContextMap = new ConcurrentHashMap<>();
+  // note that PatternedSet is implicitly Set<String>
+  private static final Map<Session, Map<Object, PatternedSet>> sessionContextMap = new HashMap<>();
   
   // so this would be like { "USER", { usernameVar, [ Session... ] } }
-  private static final Map<Object, Map<Object, Set<Session>>> contextSessionMap = new ConcurrentHashMap<>();
+  // note that PatternedMap is implicitly Map<String, T>
+  private static final Map<Object, PatternedMap<Set<Session>>> contextSessionMap = new HashMap<>();
   
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
@@ -76,20 +82,22 @@ import org.slf4j.LoggerFactory;
     
     logger.info("WebSocket disconnect from {}:{}", host, port);
 
-    var sessionContexts = sessionContextMap.get(session);
-    for(var contextMap : sessionContexts.entrySet()) {
-      var context = contextMap.getKey();
-      for(var contextVal : contextMap.getValue()) {
-        var sessionMap = contextSessionMap.get(context);
-        sessionMap.get(contextVal).remove(session);
-        if(sessionMap.get(contextVal).isEmpty())
-          sessionMap.remove(contextVal);
+    synchronized(sessionContextMap) {
+      var sessionContexts = sessionContextMap.get(session);
+      for(var contextMap : sessionContexts.entrySet()) {
+        var context = contextMap.getKey();
+        for(var contextVal : contextMap.getValue()) {
+          var sessionMap = contextSessionMap.get(context);
+          sessionMap.get(contextVal).remove(session);
+          if(sessionMap.get(contextVal).isEmpty())
+            sessionMap.remove(contextVal);
+        }
+        if(contextSessionMap.get(context).isEmpty())
+          contextSessionMap.remove(context);
       }
-      if(contextSessionMap.get(context).isEmpty())
-        contextSessionMap.remove(context);
+      
+      sessionContextMap.remove(session);
     }
-    
-    sessionContextMap.remove(session);
   }
   
   @OnWebSocketMessage public void onMessage(Session session, String message) {
@@ -126,7 +134,10 @@ import org.slf4j.LoggerFactory;
    * @param message the message to be sent
    */
   public static void dispatch(JSONObject message) {
-    var sessions = sessionContextMap.keySet();
+    Set<Session> sessions = null;
+    synchronized(sessionContextMap) {
+      sessions = new HashSet<>(sessionContextMap.keySet());
+    }
     logger.info("Queueing message for broadcast: {}", message.toString());
     synchronized(pending) {
       for(var session : sessions)
@@ -143,12 +154,16 @@ import org.slf4j.LoggerFactory;
    * @param value the value associated with the context
    * @param message the message that needs to be sent
    */
-  public static void dispatch(Object context, Object value, JSONObject message) {
-    var sessionMap = contextSessionMap.get(context);
-    if(null == sessionMap) return;
+  public static void dispatch(Object context, String value, JSONObject message) {
+    PatternedMap<Set<Session>> sessionMap = null;
+    synchronized(sessionContextMap) { // lock on sessionContextMap for consistency
+      sessionMap = contextSessionMap.get(context);
+    }
     
-    var sessions = sessionMap.get(value);
-    if(null == sessions) return;
+    Pattern pattern = new Pattern(value, false);
+    Set<Session> sessions = new HashSet<>();
+    for(var submap : sessionMap.get(pattern))
+      sessions.addAll(submap);
     
     logger.info("Queueing message for dispatch: {}", message.toString());
     synchronized(pending) {
@@ -165,14 +180,16 @@ import org.slf4j.LoggerFactory;
    * @param value the value of the context
    * @param session the websocket session
    */
-  public static void subscribe(Object context, Object value, Session session) {
-    sessionContextMap.putIfAbsent(session, new ConcurrentHashMap<>());
-    sessionContextMap.get(session).putIfAbsent(context, new CopyOnWriteArraySet<>());
-    sessionContextMap.get(session).get(context).add(value);
+  public static void subscribe(Object context, String value, Session session) {
+    synchronized(sessionContextMap) {
+      sessionContextMap.putIfAbsent(session, new HashMap<>());
+      sessionContextMap.get(session).putIfAbsent(context, new PatternedSet());
+      sessionContextMap.get(session).get(context).add(value);
 
-    contextSessionMap.putIfAbsent(context, new ConcurrentHashMap<>());
-    contextSessionMap.get(context).putIfAbsent(value, new CopyOnWriteArraySet<>());
-    contextSessionMap.get(context).get(value).add(session);
+      contextSessionMap.putIfAbsent(context, new PatternedMap<>());
+      contextSessionMap.get(context).putIfAbsent(value, new HashSet<>());
+      contextSessionMap.get(context).get(value).add(session);
+    }
   }
 
   /**
@@ -182,23 +199,30 @@ import org.slf4j.LoggerFactory;
    * @param value the value of the context
    * @param session the websocket session
    */
-  public static void unsubscribe(Object context, Object value, Session session) {
-    if(sessionContextMap.containsKey(session)
-        && sessionContextMap.get(session).containsKey(context)
-        && sessionContextMap.get(session).get(context).remove(value)
-        && sessionContextMap.get(session).get(context).isEmpty()) {
-      sessionContextMap.get(session).remove(context);
-      if(sessionContextMap.get(session).isEmpty())
-        sessionContextMap.remove(session);
-    }
+  public static void unsubscribe(Object context, String value, Session session) {
+    Pattern pattern = new Pattern(value, false);
 
-    if(contextSessionMap.containsKey(context)
-        && contextSessionMap.get(context).containsKey(value)
-        && contextSessionMap.get(context).get(value).remove(session)
-        && contextSessionMap.get(context).get(value).isEmpty()) {
-      contextSessionMap.get(context).remove(value);
-      if(contextSessionMap.get(context).isEmpty())
-        contextSessionMap.remove(context);
+    synchronized(sessionContextMap) {
+      if(sessionContextMap.containsKey(session)
+          && sessionContextMap.get(session).containsKey(context)
+          && sessionContextMap.get(session).get(context).remove(pattern)
+          && sessionContextMap.get(session).get(context).isEmpty()) {
+        sessionContextMap.get(session).remove(context);
+        if(sessionContextMap.get(session).isEmpty())
+          sessionContextMap.remove(session);
+      }
+      
+      if(contextSessionMap.containsKey(context)) {
+        var contextValItr = contextSessionMap.get(context).get(pattern).iterator();
+        while(contextValItr.hasNext()) {
+          var contextVal = contextValItr.next();
+          contextVal.remove(session);
+          if(contextVal.isEmpty())
+            contextValItr.remove();
+        }
+        if(contextSessionMap.get(context).isEmpty())
+          contextSessionMap.remove(context);
+      }
     }
   }
 
