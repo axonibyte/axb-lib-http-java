@@ -155,8 +155,9 @@ public abstract class Endpoint {
    * @param req the HTTP request
    * @return an {@link AuthStatus} that corresponds with the user's allowed
    *         permissions, or {@code null} if no authentication mechanism exists
+   * @throws EndpointException if something goes wrong during authentication
    */
-  public AuthStatus authenticate(Request req, Response res) {
+  public AuthStatus authenticate(Request req, Response res) throws EndpointException {
     return null;
   }
   
