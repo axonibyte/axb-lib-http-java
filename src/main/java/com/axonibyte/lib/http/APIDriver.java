@@ -68,7 +68,10 @@ public class APIDriver implements Runnable {
       this.wsRoute = null;
     else if(wsRoute.contains(" "))
       throw new RuntimeException("WebSocket endpoint may not contain whitsapces.");
-    else this.wsRoute = (wsRoute.charAt(0) == '/' ? "" : "/") + wsRoute;
+    else {
+      this.wsRoute = (wsRoute.charAt(0) == '/' ? "" : "/") + wsRoute;
+      WSHandler.launchDispatcher();
+    }
     
     staticFiles.location(RESPONDER_STATIC_FOLDER); // relative to the root of the classpath
   }

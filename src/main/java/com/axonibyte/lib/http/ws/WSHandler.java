@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Axonibyte Innovations, LLC. All rights reserved.
+ * Copyright (c) 2022-2024 Axonibyte Innovations, LLC. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -60,15 +60,17 @@ import org.slf4j.LoggerFactory;
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
 
+  public static synchronized boolean launchDispatcher() {
+    if(null == instance) return false;
+    instance = new Thread(new WSDispatcher());
+    instance.setDaemon(true);
+    instance.start();
+    return true;
+  }
+
   public static final Object HOST_CONTEXT = new Object();
   
   @OnWebSocketConnect public void onConnect(Session session) {
-    if(null == instance) {
-      instance = new Thread(new WSDispatcher());
-      instance.setDaemon(true);
-      instance.start();
-    }
-    
     String host = session.getRemoteAddress().getHostString();
     int port = session.getRemoteAddress().getPort();
     logger.info("WebSocket connect from {}:{}", host, port);
@@ -84,17 +86,19 @@ import org.slf4j.LoggerFactory;
 
     synchronized(sessionContextMap) {
       var sessionContexts = sessionContextMap.get(session);
-      for(var contextMap : sessionContexts.entrySet()) {
-        var context = contextMap.getKey();
-        for(var contextVal : contextMap.getValue()) {
-          var sessionMap = contextSessionMap.get(context);
-          sessionMap.get(contextVal).remove(session);
-          if(sessionMap.get(contextVal).isEmpty())
-            sessionMap.remove(contextVal);
+      if(null != sessionContexts)
+        for(var contextMap : sessionContexts.entrySet()) {
+          var context = contextMap.getKey();
+          for(var contextVal : contextMap.getValue()) {
+            var sessionMap = contextSessionMap.get(context);
+            sessionMap.get(contextVal).remove(session);
+            if(sessionMap.get(contextVal).isEmpty())
+              sessionMap.remove(contextVal);
+          }
+          if(contextSessionMap.get(context).isEmpty())
+            contextSessionMap.remove(context);
         }
-        if(contextSessionMap.get(context).isEmpty())
-          contextSessionMap.remove(context);
-      }
+      else logger.error("Session disconnected, but was not in session map!");
       
       sessionContextMap.remove(session);
     }
