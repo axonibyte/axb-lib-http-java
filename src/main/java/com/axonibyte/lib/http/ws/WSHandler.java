@@ -61,7 +61,7 @@ import org.slf4j.LoggerFactory;
   private static Thread instance = null;
 
   public static synchronized boolean launchDispatcher() {
-    if(null == instance) return false;
+    if(null != instance) return false;
     instance = new Thread(new WSDispatcher());
     instance.setDaemon(true);
     instance.start();
