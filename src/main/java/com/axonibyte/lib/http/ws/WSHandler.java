@@ -251,9 +251,14 @@ import org.slf4j.LoggerFactory;
           synchronized(pending) {
             while(pending.isEmpty()) pending.wait();
             entry = pending.pop();
+            pending.notifyAll();
           }
-        
+
           try {
+            logger.debug(
+                "Sending message to {}: \"{}\"",
+                entry.getKey().getRemote().getInetSocketAddress().getHostString(),
+                entry.getValue().toString());
             entry.getKey().getRemote().sendString(entry.getValue().toString());
           } catch(IOException e) {
             logger.error(
