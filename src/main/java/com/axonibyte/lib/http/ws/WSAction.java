@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Axonibyte Innovations, LLC. All rights reserved.
+ * Copyright (c) 2023-2024 Axonibyte Innovations, LLC. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -15,6 +15,8 @@
  */
 package com.axonibyte.lib.http.ws;
 
+import java.util.Objects;
+
 import org.eclipse.jetty.websocket.api.Session;
 import org.json.JSONObject;
 
@@ -25,24 +27,28 @@ import org.json.JSONObject;
  */
 public abstract class WSAction {
 
-  private String action = null;
+  private String[] actions = null;
 
   /**
    * Instantiates the WebSocket action.
    *
-   * @param action the name of the action to be used by clients
+   * @param action the name(s) of the action(s) to be invoked by clients; at
+   *        least one action name must be specified
    */
-  public WSAction(String action) {
-    this.action = action;
+  public WSAction(String... actions) {
+    Objects.requireNonNull(actions);
+    if(0 == actions.length)
+      throw new IllegalArgumentException("at least one action name must be specified");
+    this.actions = actions;
   }
 
   /**
-   * Retrieves the name of the action to be used by clients.
+   * Retrieves the names of the actions to be invoked by clients.
    *
-   * @return the name of the action
+   * @return the action names
    */
-  public String getAction() {
-    return action;
+  public String[] getActions() {
+    return actions;
   }
 
   /**

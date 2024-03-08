@@ -1,6 +1,6 @@
 # Axonibyte Java Library Suite - HTTP API
 
-Copyright (c) 2023 Axonibyte Innovations, LLC. All rights reserved.
+Copyright (c) 2019-2024 Axonibyte Innovations, LLC. All rights reserved.
 
 This Java library makes it easier to establish RESTful API workflows. It uses an
 underlying microframework to perform most of the work, but many frameworks and

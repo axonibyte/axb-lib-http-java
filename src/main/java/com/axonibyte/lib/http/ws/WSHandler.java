@@ -237,8 +237,13 @@ import org.slf4j.LoggerFactory;
    * @param the {@link WSAction} to insert into the workflow
    */
   public static void putAction(WSAction action) {
-    logger.info("Registering WebSocket action {}", action.getAction());
-    actions.put(action.getAction().toLowerCase(), action);
+    StringBuilder sb = new StringBuilder();
+    for(String a : action.getActions()) {
+      if(!sb.isEmpty()) sb.append(", ");
+      sb.append(a);
+      actions.put(a.toLowerCase(), action);
+    }
+    logger.info("Registering WebSocket actions: {}", sb.toString());
   }
 
   private static class WSDispatcher implements Runnable {
