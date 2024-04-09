@@ -25,6 +25,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.AbstractMap.SimpleEntry;
@@ -60,6 +61,12 @@ import org.slf4j.LoggerFactory;
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
 
+  /**
+   * Launches the dispatcher thread.
+   *
+   * @return {@code true} iff the dispatcher thread was launched after having
+   *         been previously dead or {@code null}
+   */
   public static synchronized boolean launchDispatcher() {
     if(null != instance) return false;
     instance = new Thread(new WSDispatcher());
@@ -138,6 +145,8 @@ import org.slf4j.LoggerFactory;
    * @param message the message to be sent
    */
   public static void dispatch(JSONObject message) {
+    Objects.requireNonNull(message);
+    
     Set<Session> sessions = null;
     synchronized(sessionContextMap) {
       sessions = new HashSet<>(sessionContextMap.keySet());
@@ -159,21 +168,31 @@ import org.slf4j.LoggerFactory;
    * @param message the message that needs to be sent
    */
   public static void dispatch(Object context, String value, JSONObject message) {
+    Objects.requireNonNull(context);
+    Objects.requireNonNull(value);
+    Objects.requireNonNull(message);
+    
     PatternedMap<Set<Session>> sessionMap = null;
     synchronized(sessionContextMap) { // lock on sessionContextMap for consistency
       sessionMap = contextSessionMap.get(context);
     }
+
+    if(null == sessionMap) {
+      logger.error(
+          "Session context {} was never registered.",
+          context.toString());
+    } else {
+      Pattern pattern = new Pattern(value, false);
+      Set<Session> sessions = new HashSet<>();
+      for(var submap : sessionMap.get(pattern))
+        sessions.addAll(submap);
     
-    Pattern pattern = new Pattern(value, false);
-    Set<Session> sessions = new HashSet<>();
-    for(var submap : sessionMap.get(pattern))
-      sessions.addAll(submap);
-    
-    logger.info("Queueing message for dispatch: {}", message.toString());
-    synchronized(pending) {
-      for(var session : sessions)
-        pending.addLast(new SimpleEntry<>(session, message));
-      pending.notifyAll();
+      logger.info("Queueing message for dispatch: {}", message.toString());
+      synchronized(pending) {
+        for(var session : sessions)
+          pending.addLast(new SimpleEntry<>(session, message));
+        pending.notifyAll();
+      }
     }
   }
 
@@ -185,6 +204,10 @@ import org.slf4j.LoggerFactory;
    * @param session the websocket session
    */
   public static void subscribe(Object context, String value, Session session) {
+    Objects.requireNonNull(context);
+    Objects.requireNonNull(value);
+    Objects.requireNonNull(session);
+    
     synchronized(sessionContextMap) {
       sessionContextMap.putIfAbsent(session, new HashMap<>());
       sessionContextMap.get(session).putIfAbsent(context, new PatternedSet());
@@ -204,6 +227,10 @@ import org.slf4j.LoggerFactory;
    * @param session the websocket session
    */
   public static void unsubscribe(Object context, String value, Session session) {
+    Objects.requireNonNull(context);
+    Objects.requireNonNull(value);
+    Objects.requireNonNull(session);
+    
     Pattern pattern = new Pattern(value, false);
 
     synchronized(sessionContextMap) {
@@ -237,6 +264,8 @@ import org.slf4j.LoggerFactory;
    * @param the {@link WSAction} to insert into the workflow
    */
   public static void putAction(WSAction action) {
+    Objects.requireNonNull(action);
+    
     StringBuilder sb = new StringBuilder();
     for(String a : action.getActions()) {
       if(!sb.isEmpty()) sb.append(", ");
