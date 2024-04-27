@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.AbstractMap.SimpleEntry;
@@ -50,11 +51,12 @@ public class JSONTokenizer {
    * @param request the Spark-provided HTTP request
    */
   public JSONTokenizer(Request request) throws EndpointException {
+    Objects.requireNonNull(request);
     try {
       String raw = request.body();
-      if(null == raw || raw.isBlank())
-        throw new EndpointException(request, "Empty request.", 400);
-      this.data = new JSONObject(raw);
+      this.data = null == raw || raw.isBlank()
+        ? new JSONObject()
+        : new JSONObject(raw);
       this.request = request;
     } catch(JSONException e) {
       throw new EndpointException(request, "Malformed request.", 400);
@@ -68,6 +70,8 @@ public class JSONTokenizer {
    * @param data the JSON that needs to be parsed
    */
   public JSONTokenizer(Request request, JSONObject data) {
+    Objects.requireNonNull(request);
+    Objects.requireNonNull(data);
     this.data = data;
     this.request = request;
   }
@@ -81,6 +85,7 @@ public class JSONTokenizer {
    * @return this object
    */
   public JSONTokenizer tokenize(String path, boolean required) {
+    Objects.requireNonNull(path);
     String[] tokens = path.split("\\.");
     requirements.put(path, new SimpleEntry<>(tokens, required));
     return this;
@@ -102,6 +107,7 @@ public class JSONTokenizer {
    * @return {@code true} iff the parameter exists in the JSON body
    */
   public boolean has(String token) {
+    Objects.requireNonNull(token);
     try {
       return null != get(token);
     } catch(EndpointException | RuntimeException e) {
@@ -131,6 +137,7 @@ public class JSONTokenizer {
    * @throws an {@link EndpointException} if the values doesn't exist but was required
    */
   public Object get(String token) throws EndpointException {
+    Objects.requireNonNull(token);
     Entry<String[], Boolean> entry = requirements.get(token);
     if(null == entry)
       throw new RuntimeException("Token not registered.");
