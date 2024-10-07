@@ -25,7 +25,6 @@ import static spark.Spark.webSocket;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.axonibyte.lib.http.rest.Endpoint;
 import com.axonibyte.lib.http.rest.HTTPMethod;
@@ -331,6 +330,17 @@ public class APIDriver implements Runnable {
     public Builder addEndpoints(Endpoint... endpoints) {
       this.endpoints.addAll(
           Arrays.asList(endpoints));
+      return this;
+    }
+
+    /**
+     * Sets the port on which the API will be exposed.
+     *
+     * @param port the port number
+     * @return this {@link Builder}
+     */
+    public Builder setPort(int port) {
+      this.port = port;
       return this;
     }
 
