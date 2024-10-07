@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2023 Axonibyte Innovations, LLC. All rights reserved.
+ * Copyright (c) 2020-2024 Axonibyte Innovations, LLC. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -22,6 +22,9 @@ import static spark.Spark.staticFiles;
 import static spark.Spark.stop;
 import static spark.Spark.webSocket;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.axonibyte.lib.http.rest.Endpoint;
@@ -41,28 +44,33 @@ import spark.Route;
  */
 public class APIDriver implements Runnable {
 
-  private static final AtomicReference<APIDriver> instance = new AtomicReference<>();
-  private static final String RESPONDER_STATIC_FOLDER = ".";
-
   private final Logger logger = LoggerFactory.getLogger(APIDriver.class);
-  private final String wsRoute;
-
-  public static APIDriver getInstance() {
-    return instance.get();
-  }
   
-  public static void setInstance(APIDriver driver) {
-    instance.set(driver);
-  }
+  private final int port; // the port that the front end should run on
+  private final Endpoint endpoints[]; // the pages that will be accessible
+  private final String wsRoute; // the WebSocket route, if applicable
+  private final String allowedMethods; // methods that can be accepted
+  private final String allowedOrigins; // the allowed origins for CORS
+  private final String allowedHeaders; // headers that can be accepted
+  private final String exposedHeaders; // headers that should be exposed
   
-  private int port; // the port that the front end should run on
-  private Endpoint endpoints[] = null; // the pages that will be accessible
-  private String allowedOrigins = null; // the allowed origins for CORS
   private Thread thread = null; // the thread to run the frontend
   
-  private APIDriver(int port, String allowedOrigins, String wsRoute, Endpoint... endpoints) {
-    this.allowedOrigins = allowedOrigins;
+  private APIDriver(
+      int port,
+      String allowedMethods,
+      String allowedOrigins,
+      String allowedHeaders,
+      String exposedHeaders,
+      String publicFolder,
+      Endpoint[] endpoints,
+      String wsRoute
+  ) {
     this.port = port;
+    this.allowedMethods = allowedMethods;
+    this.allowedOrigins = allowedOrigins;
+    this.allowedHeaders = allowedHeaders;
+    this.exposedHeaders = exposedHeaders;
     this.endpoints = endpoints;
     if(null == wsRoute)
       this.wsRoute = null;
@@ -73,7 +81,7 @@ public class APIDriver implements Runnable {
       WSHandler.launchDispatcher();
     }
     
-    staticFiles.location(RESPONDER_STATIC_FOLDER); // relative to the root of the classpath
+    staticFiles.location(publicFolder); // relative to the root of the classpath
   }
 
   /**
@@ -88,21 +96,19 @@ public class APIDriver implements Runnable {
     
     before((req, res) -> {
       res.header("Access-Control-Allow-Origin", allowedOrigins);
-      res.header("Access-Control-Allow-Methods", "DELETE, POST, GET, PATCH, PUT, OPTIONS");
-      res.header(
-          "Access-Control-Allow-Headers",
-          "Content-Type, Access-Control-Allow-Headers, Access-Control-Allow-Origin, Access-Control-Allow-Methods, Authorization, X-Requested-With");
-      res.header("Access-Control-Expose-Headers", "Content-Type, Content-Length");
+      res.header("Access-Control-Allow-Methods", allowedMethods);
+      res.header("Access-Control-Allow-Headers", allowedHeaders);
+      res.header("Access-Control-Expose-Headers", exposedHeaders);
       res.header("Content-Type", "application/json"); 
     });
 
     options("*", (req, res)-> {
       String accessControlRequestHeaders = req.headers("Access-Control-Request-Headers");
-      if(accessControlRequestHeaders != null)
+      if(null != accessControlRequestHeaders)
         res.header("Access-Control-Allow-Headers", accessControlRequestHeaders);
       
       String accessControlRequestMethod = req.headers("Access-Control-Request-Method");
-      if(accessControlRequestMethod != null)
+      if(null != accessControlRequestMethod)
         res.header("Access-Control-Allow-Methods", accessControlRequestMethod);
 
       return "OK";
@@ -143,22 +149,212 @@ public class APIDriver implements Runnable {
   public void halt() {
     stop();
   }
-  
+
   /**
-   * Builds the frontend and launches it in a thread.
-   * 
-   * @param port the listening port
-   * @param allowedOrigins the allowed origins for CORS
-   * @param wsRoute the WebSocket endpoint or {@code null} to disable WebSockets
-   * @param endpoints a varargs object of endpoints to hook into the API driver
-   * @return the newly-operating API driver
+   * Builds the API driver and executes it in its own thread.
+   *
+   * @author Caleb L. Power <cpower@axonibyte.com>
    */
-  public static APIDriver build(int port, String allowedOrigins, String wsRoute, Endpoint... endpoints) {
-    APIDriver apiDriver = new APIDriver(port, allowedOrigins, wsRoute, endpoints);
-    apiDriver.thread = new Thread(apiDriver);
-    apiDriver.thread.setDaemon(false);
-    apiDriver.thread.start();
-    return apiDriver;
+  public static class Builder {
+    
+    private static final String[] ALLOWED_METHODS_DEFAULT = {
+      "DELETE",
+      "POST",
+      "GET",
+      "PATCH",
+      "PUT",
+      "OPTIONS"
+    };
+    
+    private static final String[] ALLOWED_ORIGINS_DEFAULT = {
+      "*"
+    };
+    
+    private static final String[] ALLOWED_HEADERS_DEFAULT = {
+      "Content-Type",
+      "Access-Control-Allow-Headers",
+      "Access-Control-Allow-Origin",
+      "Access-Control-Allow-Methods",
+      "Authorization",
+      "X-Requested-With"
+    };
+    
+    private static final String[] EXPOSED_HEADERS_DEFAULT = {
+      "Content-Type",
+      "Content-Length"
+    };
+    
+    private List<Endpoint> endpoints = new ArrayList<>();
+    private List<String> allowedMethods = new ArrayList<>(
+        Arrays.asList(ALLOWED_METHODS_DEFAULT));
+    private List<String> allowedOrigins = new ArrayList<>(
+        Arrays.asList(ALLOWED_ORIGINS_DEFAULT));
+    private List<String> allowedHeaders = new ArrayList<>(
+        Arrays.asList(ALLOWED_HEADERS_DEFAULT));
+    private List<String> exposedHeaders = new ArrayList<>(
+        Arrays.asList(EXPOSED_HEADERS_DEFAULT));
+    private String publicFolder = ".";
+    private String wsRoute = null;
+    private int port = 0;
+
+    /**
+     * Clears all entries previously destined to be values in the
+     * {@code Access-Control-Allow-Methods} header.
+     *
+     * @return this {@link Builder}
+     */
+    public Builder clearAllowedMethods() {
+      allowedMethods.clear();
+      return this;
+    }
+
+    /**
+     * Adds one or more methods to the list of values destined for use in the
+     * {@code Access-Control-Allow-Methods} header.
+     *
+     * @param methods varargs array of valid methods
+     * @return this {@link Builder}
+     */
+    public Builder addAllowedMethods(String... methods) {
+      allowedMethods.addAll(
+          Arrays.asList(methods));
+      return this;
+    }
+
+    /**
+     * Clears all entries previously destined to be values in the
+     * {@code Access-Control-Allow-Origin} header.
+     *
+     * @return this {@link Builder}
+     */
+    public Builder clearAllowedOrigins() {
+      allowedOrigins.clear();
+      return this;
+    }
+
+    /**
+     * Adds one or more methods to the list of values destined for use in the
+     * {@code Access-Control-ALlow-Origin} header.
+     *
+     * @param origins varargs array of valid origins
+     * @return this {@link Builder}
+     */
+    public Builder addAllowedOrigins(String... origins) {
+      allowedOrigins.addAll(
+          Arrays.asList(origins));
+      return this;
+    }
+
+    /**
+     * Clears all entries previously destined to be values in the
+     * {@code Access-Control-Allow-Headers} header.
+     *
+     * @return this {@link Builder}
+     */
+    public Builder clearAllowedHeaders() {
+      allowedHeaders.clear();
+      return this;
+    }
+
+    /**
+     * Adds one or more headers to the list of values destined for use in the
+     * {@code Access-Control-Allow-Headers} header.
+     *
+     * @param headers varargs array of allowed headers
+     * @return this {@link Builder}
+     */
+    public Builder addAllowedHeaders(String... headers) {
+      allowedHeaders.addAll(
+          Arrays.asList(headers));
+      return this;
+    }
+
+    /**
+     * Clears all entries previously destined to be values in the
+     * {@code Access-Control-Expose-Headers} header.
+     *
+     * @return this {@link Builder}
+     */
+    public Builder clearExposedHeaders() {
+      exposedHeaders.clear();
+      return this;
+    }
+
+    /**
+     * Adds one or more headers to the list of values destined for use in the
+     * {@code Access-Control-Expose-Headers} header.
+     *
+     * @param headers varargs array of the exposed headers
+     * @return this {@link Builder}
+     */
+    public Builder addExposedHeaders(String... headers) {
+      exposedHeaders.addAll(
+          Arrays.asList(headers));
+      return this;
+    }
+
+    /**
+     * Establishes the public folder that will be served to the public in the
+     * event a route isn't available. Note that if this program is indeed going
+     * to be packaged as a JAR, then {@code /} denotes the root of the resources
+     * folder... that is, if assets are generally stored at
+     * {@code src/main/resources/public} then the argument for this method should
+     * be {@code /public}.
+     *
+     * @param the path to the public folder
+     * @return this {@link Builder}
+     */
+    public Builder setPublicFolder(String publicFolder) {
+      this.publicFolder = publicFolder;
+      return this;
+    }
+
+    /**
+     * Sets the WebSocket route, or disableds the WebSocket route entirely.
+     *
+     * @param wsRoute the path for the WebSocket endpoint, or {@code null} if
+     *        WebSockets should be disabled altogether
+     * @return this {@link Builder}
+     */
+    public Builder setWSRoute(String wsRoute) {
+      this.wsRoute = wsRoute;
+      return this;
+    }
+
+    /**
+     * Adds one or more {@link Endpoint} objects to be accessible by any actor
+     * that has the ability to hit the port.
+     *
+     * @param endpoints a varargs array of {@link Endpoint} objects
+     * @return this {@link Builder}
+     */
+    public Builder addEndpoints(Endpoint... endpoints) {
+      this.endpoints.addAll(
+          Arrays.asList(endpoints));
+      return this;
+    }
+
+    /**
+     * Builds, launches, and returns an {@link APIDriver} based on specified
+     * parameters.
+     *
+     * @return the new {@link APIDriver}
+     */
+    public APIDriver build() {
+      APIDriver apiDriver = new APIDriver(
+          port,
+          String.join(", ", allowedMethods),
+          String.join(", ", allowedOrigins),
+          String.join(", ", allowedHeaders),
+          String.join(", ", exposedHeaders),
+          publicFolder,
+          endpoints.toArray(new Endpoint[endpoints.size()]),
+          wsRoute);
+      apiDriver.thread = new Thread(apiDriver);
+      apiDriver.thread.setDaemon(false);
+      apiDriver.thread.start();
+      return apiDriver;
+    }
   }
   
 }
