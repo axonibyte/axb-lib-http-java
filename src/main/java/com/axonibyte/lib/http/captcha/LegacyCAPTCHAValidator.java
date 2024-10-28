@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.axonibyte.lib.http;
+package com.axonibyte.lib.http.captcha;
 
 import java.io.IOException;
 
@@ -27,7 +27,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 
-public class CAPTCHAValidator {
+@Deprecated public class LegacyCAPTCHAValidator {
 
   /**
    * Expected header to receive user's reCAPTCHA v2 response.
@@ -41,7 +41,7 @@ public class CAPTCHAValidator {
   private static final String REMOTE_IP_PARAM = "remoteip";
   private static final String SUCCESS_FIELD = "success";
 
-  private final Logger logger = LoggerFactory.getLogger(CAPTCHAValidator.class);
+  private final Logger logger = LoggerFactory.getLogger(LegacyCAPTCHAValidator.class);
   private String secret = null;
   
   /**
@@ -49,7 +49,7 @@ public class CAPTCHAValidator {
    * 
    * @param secret the reCAPTCHA secret key
    */
-  public CAPTCHAValidator(String secret) {
+  public LegacyCAPTCHAValidator(String secret) {
     this.secret = secret;
   }
   
