@@ -19,7 +19,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
-import com.google.auth.Credentials;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.recaptchaenterprise.v1.RecaptchaEnterpriseServiceClient;
 import com.google.cloud.recaptchaenterprise.v1.RecaptchaEnterpriseServiceSettings;
@@ -32,7 +31,12 @@ import com.google.recaptchaenterprise.v1.RiskAnalysis.ClassificationReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class CAPTCHAValidator {
+/**
+ * Validates a Google RECAPTCHA token.
+ *
+ * @author Caleb L. Power <cpower@axonibyte.com>
+ */
+public class CAPTCHAValidator implements AutoCloseable {
 
   /**
    * Expected header to receive user's CAPTCHA response.
@@ -40,9 +44,9 @@ public class CAPTCHAValidator {
   public static final String CAPTCHA_HEADER = "X-CAPTCHA-TOKEN";
 
   private final Logger logger = LoggerFactory.getLogger(CAPTCHAValidator.class);
-  private final Credentials credentials;
   private final String projectID;
   private final String siteKey;
+  private final RecaptchaEnterpriseServiceClient client;
 
   /**
    * Instantiates the CAPTCHA validator.
@@ -57,7 +61,13 @@ public class CAPTCHAValidator {
   public CAPTCHAValidator(String credsFile, String projectID, String siteKey) throws IOException {
     this.projectID = projectID;
     this.siteKey = siteKey;
-    this.credentials = GoogleCredentials.fromStream(new FileInputStream(credsFile));
+    this.client = RecaptchaEnterpriseServiceClient.create(
+        RecaptchaEnterpriseServiceSettings.newBuilder()
+            .setCredentialsProvider(
+                FixedCredentialsProvider.create(
+                    GoogleCredentials.fromStream(
+                        new FileInputStream(credsFile))))
+            .build());
   }
 
   /**
@@ -78,76 +88,57 @@ public class CAPTCHAValidator {
         "analyzing reCAPTCHA token for user at {}",
         null == ip ? "unspecified IP address" : ip);
     
-    try(RecaptchaEnterpriseServiceClient client = RecaptchaEnterpriseServiceClient.create(
-        RecaptchaEnterpriseServiceSettings.newBuilder()
-            .setCredentialsProvider(
-                FixedCredentialsProvider.create(credentials))
-            .build())) {
+    var eventBuilder = Event.newBuilder()
+        .setSiteKey(siteKey)
+        .setToken(token);
+    if(null != ip)
+      eventBuilder.setUserIpAddress(ip);
+    
+    CreateAssessmentRequest request = CreateAssessmentRequest.newBuilder()
+        .setParent(
+            ProjectName.of(projectID).toString())
+        .setAssessment(
+            Assessment.newBuilder()
+                .setEvent(eventBuilder.build())
+                .build())
+        .build();
+    
+    Assessment assessment = client.createAssessment(request);
+    
+    if(!assessment.getTokenProperties().getValid())
+      logger.error(
+          "failed to create assessment: {}",
+          assessment.getTokenProperties()
+              .getInvalidReason()
+              .name());
+    
+    else if(null != action
+        && !action.equals(assessment.getTokenProperties().getAction()))
+      logger.error(
+          "mismatched action: got \"{}\" but needed \"{}\"",
+          assessment.getTokenProperties().getAction(),
+          action);
+    
+    else {
       
-      RecaptchaEnterpriseServiceClient.create(
-          RecaptchaEnterpriseServiceSettings.newBuilder()
-              .setCredentialsProvider(
-                  FixedCredentialsProvider.create(credentials))
-              .build());
-      
-      var eventBuilder = Event.newBuilder()
-          .setSiteKey(siteKey)
-          .setToken(token);
-      if(null != ip)
-        eventBuilder.setUserIpAddress(ip);
-      
-      CreateAssessmentRequest request = CreateAssessmentRequest.newBuilder()
-          .setParent(
-              ProjectName.of(projectID).toString())
-          .setAssessment(
-              Assessment.newBuilder()
-                  .setEvent(eventBuilder.build())
-                  .build())
-          .build();
-      
-      Assessment assessment = client.createAssessment(request);
-      
-      if(!assessment.getTokenProperties().getValid())
-        logger.error(
-            "failed to create assessment: {}",
-            assessment.getTokenProperties()
-                .getInvalidReason()
-                .name());
-      
-      else if(null != action
-          && !action.equals(assessment.getTokenProperties().getAction()))
-        logger.error(
-            "mismatched action: got \"{}\" but needed \"{}\"",
-            assessment.getTokenProperties().getAction(),
-            action);
-      
-      else {
-        
-        StringBuilder classificationSB = new StringBuilder();
-        for(ClassificationReason reason : assessment.getRiskAnalysis().getReasonsList()) {
-          if(!classificationSB.isEmpty())
-            classificationSB.append("; ");
-          classificationSB.append(reason.toString());
-        }
-        
-        var assessmentName = assessment.getName();
-        
-        logger.info(
-            "user at {} achieved risk score of {} on assessment {}{}",
-            null == ip ? "unspecified IP address" : ip,
-            assessment.getRiskAnalysis().getScore(),
-            assessmentName.substring(assessmentName.lastIndexOf("/") + 1),
-            classificationSB.isEmpty() ? "" : (": " + classificationSB.toString()));
-        
-        return assessment.getRiskAnalysis().getScore();
+      StringBuilder classificationSB = new StringBuilder();
+      for(ClassificationReason reason : assessment.getRiskAnalysis().getReasonsList()) {
+        if(!classificationSB.isEmpty())
+          classificationSB.append("; ");
+        classificationSB.append(reason.toString());
       }
       
-    } catch(IOException e) {
-      logger.error(
-          "malfunction occurred whilst attempting to score CAPTCHA repsonse: {}",
-          null == e.getMessage()
-              ? "no additional information available"
-              : e.getMessage());
+      var assessmentName = assessment.getName();
+      
+      logger.info(
+          "user at {} achieved risk score of {} on assessment {}{}",
+          null == ip ? "unspecified IP address" : ip,
+          assessment.getRiskAnalysis().getScore(),
+          assessmentName.substring(assessmentName.lastIndexOf("/") + 1),
+          classificationSB.isEmpty() ? "" : (": " + classificationSB.toString()));
+      
+      return assessment.getRiskAnalysis().getScore();
+      
     }
     
     return 0f;
@@ -169,6 +160,14 @@ public class CAPTCHAValidator {
    */
   public String getSiteKey() {
     return siteKey;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override public void close() {
+    client.close();
+    client.shutdown();
   }
   
 }
