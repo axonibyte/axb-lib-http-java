@@ -27,11 +27,12 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.Map.Entry;
 
 import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.StatusCode;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
@@ -47,7 +48,10 @@ import org.slf4j.LoggerFactory;
  */
 @WebSocket public class WSHandler {
   
-  private static final Map<String, WSAction> actions = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+  // Concurrent because putAction() mutates this from application startup threads while
+  // onMessage() reads it from Jetty's I/O threads; a plain TreeMap here is a data race.
+  private static final Map<String, WSAction> actions =
+      new ConcurrentSkipListMap<>(String.CASE_INSENSITIVE_ORDER);
   private static final Deque<Entry<Session, JSONObject>> pending = new ArrayDeque<>();
   
   // so this would be like { Session, { "USER", [ usernameVar... ] }
@@ -58,8 +62,54 @@ import org.slf4j.LoggerFactory;
   // note that PatternedMap is implicitly Map<String, T>
   private static final Map<Object, PatternedMap<Set<Session>>> contextSessionMap = new HashMap<>();
   
+  // the authenticated identity associated with each live session, as returned by the
+  // configured WSConnectionAuthenticator
+  private static final Map<Session, Object> sessionIdentityMap = new HashMap<>();
+
   private static Logger logger = LoggerFactory.getLogger(WSHandler.class);
   private static Thread instance = null;
+
+  /**
+   * The identity assigned to connections when no {@link WSConnectionAuthenticator}
+   * has been configured.
+   */
+  public static final Object ANONYMOUS_IDENTITY = new Object();
+
+  // Permissive by default so that existing consumers are unaffected by the
+  // introduction of this hook. Applications that expose a WebSocket route to an
+  // untrusted network are expected to install a real authenticator; see
+  // WSConnectionAuthenticator.
+  private static WSConnectionAuthenticator connectionAuthenticator =
+      session -> ANONYMOUS_IDENTITY;
+
+  /**
+   * Installs the {@link WSConnectionAuthenticator} used to vet incoming WebSocket
+   * connections. Until this is called, all connections are accepted and assigned
+   * {@link #ANONYMOUS_IDENTITY}.
+   *
+   * @param authenticator the authenticator to install; {@code null} restores the
+   *        permissive default
+   */
+  public static synchronized void setConnectionAuthenticator(WSConnectionAuthenticator authenticator) {
+    connectionAuthenticator = null == authenticator
+        ? session -> ANONYMOUS_IDENTITY
+        : authenticator;
+  }
+
+  /**
+   * Retrieves the authenticated identity associated with a live session, as
+   * determined by the configured {@link WSConnectionAuthenticator} when the
+   * connection was established.
+   *
+   * @param session the {@link Session} in question
+   * @return the identity, or {@code null} if the session is not (or is no longer)
+   *         a live authenticated connection
+   */
+  public static Object identityOf(Session session) {
+    synchronized(sessionIdentityMap) {
+      return sessionIdentityMap.get(session);
+    }
+  }
 
   /**
    * Launches the dispatcher thread.
@@ -80,7 +130,37 @@ import org.slf4j.LoggerFactory;
   @OnWebSocketConnect public void onConnect(Session session) {
     String host = session.getRemoteAddress().getHostString();
     int port = session.getRemoteAddress().getPort();
+
+    WSConnectionAuthenticator authenticator;
+    synchronized(WSHandler.class) {
+      authenticator = connectionAuthenticator;
+    }
+
+    Object identity;
+    try {
+      identity = authenticator.authenticate(session);
+    } catch(Exception e) { // an authenticator that blows up must not admit the connection
+      logger.error(
+          "WebSocket authenticator threw {} for {}:{}; rejecting connection.",
+          e.getClass().getSimpleName(),
+          host,
+          port);
+      identity = null;
+    }
+
+    if(null == identity) {
+      logger.warn("Rejected unauthenticated WebSocket connection from {}:{}", host, port);
+      // Close before subscribing to anything, so a rejected peer never receives
+      // dispatched traffic and never appears in the session maps.
+      session.close(StatusCode.POLICY_VIOLATION, "unauthorized");
+      return;
+    }
+
     logger.info("WebSocket connect from {}:{}", host, port);
+
+    synchronized(sessionIdentityMap) {
+      sessionIdentityMap.put(session, identity);
+    }
 
     subscribe(HOST_CONTEXT, session.getRemoteAddress().getHostString(), session);
   }
@@ -91,22 +171,33 @@ import org.slf4j.LoggerFactory;
     
     logger.info("WebSocket disconnect from {}:{}", host, port);
 
+    boolean wasAuthenticated;
+    synchronized(sessionIdentityMap) {
+      wasAuthenticated = null != sessionIdentityMap.remove(session);
+    }
+
     synchronized(sessionContextMap) {
       var sessionContexts = sessionContextMap.get(session);
       if(null != sessionContexts)
         for(var contextMap : sessionContexts.entrySet()) {
           var context = contextMap.getKey();
+          var sessionMap = contextSessionMap.get(context);
+          if(null == sessionMap) continue; // context already torn down
           for(var contextVal : contextMap.getValue()) {
-            var sessionMap = contextSessionMap.get(context);
-            sessionMap.get(contextVal).remove(session);
-            if(sessionMap.get(contextVal).isEmpty())
+            var sessions = sessionMap.get(contextVal);
+            if(null == sessions) continue; // subscription already removed
+            sessions.remove(session);
+            if(sessions.isEmpty())
               sessionMap.remove(contextVal);
           }
-          if(contextSessionMap.get(context).isEmpty())
+          if(sessionMap.isEmpty())
             contextSessionMap.remove(context);
         }
-      else logger.error("Session disconnected, but was not in session map!");
-      
+      else if(wasAuthenticated)
+        // Only noteworthy for a session that was actually admitted; connections
+        // rejected in onConnect are never subscribed and land here by design.
+        logger.error("Session disconnected, but was not in session map!");
+
       sessionContextMap.remove(session);
     }
   }

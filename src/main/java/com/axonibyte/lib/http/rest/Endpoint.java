@@ -108,7 +108,16 @@ public abstract class Endpoint {
           req.requestMethod(),
           req.pathInfo());
       
-      response = answer(req, res, authenticate(req, res));
+      AuthStatus auth = authenticate(req, res);
+
+      // Fail closed. An endpoint that neither overrides authenticate() nor explicitly
+      // declares itself public would otherwise be served with a null AuthStatus, which is
+      // indistinguishable from "authenticated with no permissions" at the call site --
+      // a forgotten override becomes a silent authentication bypass.
+      if(null == auth && authRequired())
+        throw new EndpointException(req, "Authentication required.", 401);
+
+      response = answer(req, res, auth);
     } catch(EndpointException e) {
       logError(
           "Response code {}: {} ({})",
@@ -159,6 +168,23 @@ public abstract class Endpoint {
    */
   public AuthStatus authenticate(Request req, Response res) throws EndpointException {
     return null;
+  }
+
+  /**
+   * Determines whether this endpoint refuses to serve requests for which
+   * {@link #authenticate(Request, Response)} produced no {@link AuthStatus}.
+   *
+   * <p>Defaults to {@code true}, so an endpoint that forgets to override
+   * {@code authenticate} returns 401 rather than silently serving traffic with a
+   * {@code null} auth status. Endpoints that are genuinely public -- account
+   * creation, unauthenticated callbacks, health checks -- must override this to
+   * return {@code false}, which makes each such decision explicit and reviewable.</p>
+   *
+   * @return {@code true} iff a {@code null} {@link AuthStatus} should be rejected
+   *         with a 401
+   */
+  public boolean authRequired() {
+    return true;
   }
   
   /**

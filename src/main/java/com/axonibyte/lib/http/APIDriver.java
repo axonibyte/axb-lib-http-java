@@ -24,16 +24,21 @@ import static spark.Spark.webSocket;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 import com.axonibyte.lib.http.rest.Endpoint;
 import com.axonibyte.lib.http.rest.HTTPMethod;
+import com.axonibyte.lib.http.ws.WSConnectionAuthenticator;
 import com.axonibyte.lib.http.ws.WSHandler;
 
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import spark.Request;
+import spark.Response;
 import spark.Route;
 
 /**
@@ -49,16 +54,17 @@ public class APIDriver implements Runnable {
   private final Endpoint endpoints[]; // the pages that will be accessible
   private final String wsRoute; // the WebSocket route, if applicable
   private final String allowedMethods; // methods that can be accepted
-  private final String allowedOrigins; // the allowed origins for CORS
+  private final Set<String> allowedOrigins; // the allowed origins for CORS
   private final String allowedHeaders; // headers that can be accepted
   private final String exposedHeaders; // headers that should be exposed
+  private final boolean anyOriginAllowed; // true iff "*" was configured
   
   private Thread thread = null; // the thread to run the frontend
   
   private APIDriver(
       int port,
       String allowedMethods,
-      String allowedOrigins,
+      Collection<String> allowedOrigins,
       String allowedHeaders,
       String exposedHeaders,
       String publicFolder,
@@ -67,7 +73,8 @@ public class APIDriver implements Runnable {
   ) {
     this.port = port;
     this.allowedMethods = allowedMethods;
-    this.allowedOrigins = allowedOrigins;
+    this.allowedOrigins = Set.copyOf(allowedOrigins);
+    this.anyOriginAllowed = allowedOrigins.contains("*");
     this.allowedHeaders = allowedHeaders;
     this.exposedHeaders = exposedHeaders;
     this.endpoints = endpoints;
@@ -94,22 +101,15 @@ public class APIDriver implements Runnable {
     port(port);
     
     before((req, res) -> {
-      res.header("Access-Control-Allow-Origin", allowedOrigins);
-      res.header("Access-Control-Allow-Methods", allowedMethods);
-      res.header("Access-Control-Allow-Headers", allowedHeaders);
-      res.header("Access-Control-Expose-Headers", exposedHeaders);
-      res.header("Content-Type", "application/json"); 
+      applyCORSHeaders(req, res);
+      res.header("Content-Type", "application/json");
     });
 
     options("*", (req, res)-> {
-      String accessControlRequestHeaders = req.headers("Access-Control-Request-Headers");
-      if(null != accessControlRequestHeaders)
-        res.header("Access-Control-Allow-Headers", accessControlRequestHeaders);
-      
-      String accessControlRequestMethod = req.headers("Access-Control-Request-Method");
-      if(null != accessControlRequestMethod)
-        res.header("Access-Control-Allow-Methods", accessControlRequestMethod);
-
+      // Advertise only what is actually configured. Reflecting the client's requested
+      // headers and methods back at it makes the preflight response meaningless, since it
+      // approves whatever was asked for.
+      applyCORSHeaders(req, res);
       return "OK";
     });
     
@@ -147,6 +147,59 @@ public class APIDriver implements Runnable {
    */
   public void halt() {
     stop();
+  }
+
+  /**
+   * Applies the CORS response headers for a request.
+   *
+   * <p>{@code Access-Control-Allow-Origin} accepts a single origin or {@code *} --
+   * never a list. Emitting a comma-joined list of configured origins produces a
+   * header that every browser rejects, which silently blocks all of them. So the
+   * request's {@code Origin} is matched against the allowlist and only the matching
+   * value is echoed back.</p>
+   *
+   * @param req the HTTP request
+   * @param res the HTTP response
+   */
+  private void applyCORSHeaders(Request req, Response res) {
+    String origin = req.headers("Origin");
+    String allow = resolveAllowOrigin(origin, allowedOrigins, anyOriginAllowed);
+
+    // The response varies by Origin whenever the allowlist is consulted, so shared
+    // caches must key on it.
+    if(!anyOriginAllowed) res.header("Vary", "Origin");
+
+    if(null == allow) {
+      // No matching origin: emit no Access-Control-Allow-Origin at all, so the browser
+      // blocks the cross-origin read. That is the desired outcome.
+      if(null != origin)
+        logger.debug("Rejected CORS origin {} (not in allowlist).", origin);
+      return;
+    }
+
+    res.header("Access-Control-Allow-Origin", allow);
+    res.header("Access-Control-Allow-Methods", allowedMethods);
+    res.header("Access-Control-Allow-Headers", allowedHeaders);
+    res.header("Access-Control-Expose-Headers", exposedHeaders);
+  }
+
+  /**
+   * Determines the value of the {@code Access-Control-Allow-Origin} response header
+   * for a given request origin.
+   *
+   * <p>Package-private and pure so that the matching rule can be tested directly,
+   * without standing up a server.</p>
+   *
+   * @param requestOrigin the request's {@code Origin} header, possibly {@code null}
+   * @param allowedOrigins the configured allowlist
+   * @param anyOriginAllowed {@code true} iff the allowlist contained {@code *}
+   * @return the header value to emit, or {@code null} if the header should be omitted
+   */
+  static String resolveAllowOrigin(
+      String requestOrigin, Set<String> allowedOrigins, boolean anyOriginAllowed) {
+    if(anyOriginAllowed) return "*";
+    if(null == requestOrigin) return null;
+    return allowedOrigins.contains(requestOrigin) ? requestOrigin : null;
   }
 
   /**
@@ -195,6 +248,23 @@ public class APIDriver implements Runnable {
     private String publicFolder = ".";
     private String wsRoute = null;
     private int port = 0;
+    private WSConnectionAuthenticator wsConnectionAuthenticator = null;
+
+    /**
+     * Sets the {@link WSConnectionAuthenticator} used to vet incoming WebSocket
+     * connections on the route configured via {@link #setWSRoute(String)}.
+     *
+     * <p>If this is not set, every connection that reaches the WebSocket route is
+     * accepted. Any deployment whose WebSocket route is reachable from an untrusted
+     * network should set one.</p>
+     *
+     * @param authenticator the {@link WSConnectionAuthenticator} to install
+     * @return this {@link Builder}
+     */
+    public Builder setWSConnectionAuthenticator(WSConnectionAuthenticator authenticator) {
+      this.wsConnectionAuthenticator = authenticator;
+      return this;
+    }
 
     /**
      * Clears all entries previously destined to be values in the
@@ -351,10 +421,15 @@ public class APIDriver implements Runnable {
      * @return the new {@link APIDriver}
      */
     public APIDriver build() {
+      // Installed before the driver thread starts so that no connection can be accepted
+      // ahead of the authenticator being in place.
+      if(null != wsConnectionAuthenticator)
+        WSHandler.setConnectionAuthenticator(wsConnectionAuthenticator);
+
       APIDriver apiDriver = new APIDriver(
           port,
           String.join(", ", allowedMethods),
-          String.join(", ", allowedOrigins),
+          allowedOrigins,
           String.join(", ", allowedHeaders),
           String.join(", ", exposedHeaders),
           publicFolder,
