@@ -17,6 +17,7 @@ package com.axonibyte.lib.http.captcha;
 
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.auth.oauth2.GoogleCredentials;
@@ -49,7 +50,93 @@ public class CAPTCHAValidator implements AutoCloseable {
   private final RecaptchaEnterpriseServiceClient client;
 
   /**
+   * How a validator proves who it is to Google.
+   *
+   * <p>Stated rather than inferred. It would be possible to guess from the
+   * shape of the secret -- a path has slashes, a key does not -- but a guess
+   * like that is right until somebody's key contains a slash or somebody's path
+   * does not, and then it is wrong somewhere far from where it was made.
+   *
+   * @author Caleb L. Power &lt;cpower@axonibyte.com&gt;
+   */
+  public enum Credential {
+
+    /**
+     * A service account key, as a path to its JSON file on disk.
+     *
+     * <p>The historical option, and increasingly the awkward one: Google
+     * applies the {@code iam.disableServiceAccountKeyCreation} organization
+     * policy by default to newer organizations, which blocks the download this
+     * needs. Any credential JSON {@link GoogleCredentials#fromStream} accepts
+     * will do, including a workload identity federation configuration.
+     */
+    SERVICE_ACCOUNT,
+
+    /**
+     * An API key, restricted to the reCAPTCHA Enterprise API.
+     *
+     * <p>No file, no service account, and -- worth knowing -- no application
+     * default credentials either: gax resolves an API key before it ever
+     * consults a credentials provider, so this works on a host that has no
+     * Google credentials of any kind. That is the whole point of it.
+     */
+    API_KEY
+  }
+
+  /**
+   * Builds the client settings for a credential.
+   *
+   * <p>Package-visible so it can be tested without opening a client or a
+   * socket, which is the only part of construction worth asserting: that an API
+   * key lands where gax looks for one, and that a service account is read from
+   * disk.
+   *
+   * @param credential which kind of secret {@code secret} is
+   * @param secret the path to a credentials file, or the API key itself
+   * @return the settings builder, ready to build
+   * @throws IOException if a credentials file could not be read
+   */
+  static RecaptchaEnterpriseServiceSettings.Builder settingsFor(
+      Credential credential, String secret) throws IOException {
+    var settings = RecaptchaEnterpriseServiceSettings.newBuilder();
+
+    switch(credential) {
+      case SERVICE_ACCOUNT -> {
+        // try-with-resources: the stream used to be handed to fromStream and
+        // never closed, so every validator leaked a file descriptor for the
+        // life of the process.
+        try(InputStream creds = new FileInputStream(secret)) {
+          settings.setCredentialsProvider(
+              FixedCredentialsProvider.create(
+                  GoogleCredentials.fromStream(creds)));
+        }
+      }
+
+      case API_KEY -> settings.setApiKey(secret);
+    }
+
+    return settings;
+  }
+
+  /**
    * Instantiates the CAPTCHA validator.
+   *
+   * @param credential which kind of secret {@code secret} is
+   * @param secret the path to a credentials JSON file, or an API key
+   * @param projectID the Google Cloud project ID
+   * @param siteKey the reCAPTCHA site key
+   * @throws IOException if the credentials could not be read
+   */
+  public CAPTCHAValidator(
+      Credential credential, String secret, String projectID, String siteKey) throws IOException {
+    this.projectID = projectID;
+    this.siteKey = siteKey;
+    this.client = RecaptchaEnterpriseServiceClient.create(
+        settingsFor(credential, secret).build());
+  }
+
+  /**
+   * Instantiates the CAPTCHA validator against a service account.
    *
    * @param credsFile the path to the credentials JSON file associated with the
    *        service account
@@ -57,17 +144,13 @@ public class CAPTCHAValidator implements AutoCloseable {
    *        account
    * @param siteKey the reCAPTCHA site key
    * @throws IOException if the credentials could not be read
+   * @deprecated say which kind of credential it is; use
+   *             {@link #CAPTCHAValidator(Credential, String, String, String)}.
+   *             <strong>Removed in 0.6.0.</strong>
    */
-  public CAPTCHAValidator(String credsFile, String projectID, String siteKey) throws IOException {
-    this.projectID = projectID;
-    this.siteKey = siteKey;
-    this.client = RecaptchaEnterpriseServiceClient.create(
-        RecaptchaEnterpriseServiceSettings.newBuilder()
-            .setCredentialsProvider(
-                FixedCredentialsProvider.create(
-                    GoogleCredentials.fromStream(
-                        new FileInputStream(credsFile))))
-            .build());
+  @Deprecated public CAPTCHAValidator(
+      String credsFile, String projectID, String siteKey) throws IOException {
+    this(Credential.SERVICE_ACCOUNT, credsFile, projectID, siteKey);
   }
 
   /**
