@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
+import com.google.api.gax.rpc.ApiException;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.recaptchaenterprise.v1.RecaptchaEnterpriseServiceClient;
 import com.google.cloud.recaptchaenterprise.v1.RecaptchaEnterpriseServiceSettings;
@@ -267,7 +268,8 @@ public class CAPTCHAValidator implements AutoCloseable {
    * @param action the action expected alongside the challenge, or {@code null}
    *        to accept whichever action the token carries
    * @param ip the IP address of the remote user (optional)
-   * @return what the assessment said
+   * @return what the assessment said; never throws, and reports a service that
+   *         could not be reached as an invalid verdict carrying its status
    */
   public Verdict assess(String token, String action, String ip) {
     if(null == token || token.isBlank())
@@ -292,7 +294,27 @@ public class CAPTCHAValidator implements AutoCloseable {
                 .build())
         .build();
 
-    Assessment assessment = client.createAssessment(request);
+    Assessment assessment;
+    try {
+      assessment = client.createAssessment(request);
+    } catch(ApiException e) {
+      // Fails closed, and does not escape. Every other way this method declines
+      // a token is a Verdict, so letting a transport failure leave as an
+      // unchecked Google exception makes callers handle two shapes of "no" --
+      // and the one they will forget is the one that only happens when the key
+      // is wrong, the quota is spent, or Google is unreachable.
+      //
+      // Those are exactly the circumstances where a clear refusal beats a stack
+      // trace: a caller that reads this as "not human" refuses the request,
+      // which is the safe answer, and the status is on the verdict for anyone
+      // who wants to tell it apart from a bad token.
+      String status = e.getStatusCode().getCode().name();
+      logger.error(
+          "could not assess a reCAPTCHA token ({}): {}",
+          status,
+          e.getMessage());
+      return Verdict.invalid(status);
+    }
 
     if(!assessment.getTokenProperties().getValid()) {
       String reason = assessment.getTokenProperties().getInvalidReason().name();
