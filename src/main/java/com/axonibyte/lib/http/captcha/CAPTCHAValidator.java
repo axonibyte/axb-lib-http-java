@@ -27,6 +27,7 @@ import com.google.recaptchaenterprise.v1.Assessment;
 import com.google.recaptchaenterprise.v1.CreateAssessmentRequest;
 import com.google.recaptchaenterprise.v1.Event;
 import com.google.recaptchaenterprise.v1.ProjectName;
+import com.google.recaptchaenterprise.v1.RiskAnalysis;
 import com.google.recaptchaenterprise.v1.RiskAnalysis.ClassificationReason;
 
 import org.slf4j.Logger;
@@ -154,29 +155,134 @@ public class CAPTCHAValidator implements AutoCloseable {
   }
 
   /**
-   * Scores the token provided in the reCAPTCHA response after a user submits
-   * their CAPTCHA challenge.
+   * What the policy engine did about a token.
+   *
+   * <p>Mirrored rather than re-exported so a consumer never has to import a
+   * protobuf type to read a verdict. The names match Google's enum exactly,
+   * because a translation layer that renamed them would be one more thing to
+   * check when reading a log line against their documentation.
+   *
+   * @author Caleb L. Power &lt;cpower@axonibyte.com&gt;
+   */
+  public enum Challenge {
+
+    /**
+     * The key does not do policy-based challenges, so nothing decided anything.
+     *
+     * <p>What a checkbox or score-based key always reports. A caller reading
+     * this must fall back to the score.
+     */
+    UNSPECIFIED,
+
+    /** The policy looked and chose not to challenge. That is a pass. */
+    NOCAPTCHA,
+
+    /** A challenge was presented and solved. */
+    PASSED,
+
+    /** A challenge was presented and failed, or was answered suspiciously. */
+    FAILED
+  }
+
+  /**
+   * Everything an assessment said, so the caller can decide.
+   *
+   * <p>Deliberately reports rather than judges. The two kinds of key are read
+   * two different ways -- a checkbox or score-based key by thresholding
+   * {@link #score()}, a policy-based one by reading {@link #challenge()} -- and
+   * which of those is right depends on how the key was created, which is
+   * something this library cannot see and the deployment configuring it can.
+   *
+   * @param tokenValid whether Google accepted the token at all
+   * @param invalidReason why it did not, or {@code null} when it did
+   * @param score the risk score, {@code 0.0f} when the token was rejected
+   * @param challenge the policy verdict, {@link Challenge#UNSPECIFIED} unless
+   *        the key does policy-based challenges
+   */
+  public static record Verdict(
+      boolean tokenValid, String invalidReason, float score, Challenge challenge) {
+
+    /** A token Google would not accept. Scores zero and decides nothing. */
+    static Verdict invalid(String reason) {
+      return new Verdict(false, reason, 0f, Challenge.UNSPECIFIED);
+    }
+  }
+
+  /**
+   * Maps Google's challenge enum onto ours.
+   *
+   * <p>Anything unrecognised becomes {@link Challenge#UNSPECIFIED}, which sends
+   * the caller to the score rather than to a guess. A future value this build
+   * has never heard of must not read as a pass.
+   *
+   * @param challenge the value from the assessment
+   * @return the mirrored value
+   */
+  static Challenge challengeOf(RiskAnalysis.Challenge challenge) {
+    if(null == challenge) return Challenge.UNSPECIFIED;
+    return switch(challenge) {
+      case NOCAPTCHA -> Challenge.NOCAPTCHA;
+      case PASSED -> Challenge.PASSED;
+      case FAILED -> Challenge.FAILED;
+      default -> Challenge.UNSPECIFIED;
+    };
+  }
+
+  /**
+   * Scores the token provided in the reCAPTCHA response.
+   *
+   * <p>Retained for callers that threshold a score -- which is the right way to
+   * read a checkbox or score-based key, and the wrong way to read a
+   * policy-based one. Use {@link #assess(String, String, String)} if the key
+   * might be policy-based.
    *
    * @param token the token returned by the reCAPTCHA service
    * @param action the specified action passed alongside the challenge (optional)
    * @param ip the IP address of the remote user (optional)
    * @return some number on a range of {@code 0.0f} to {@code 1.0f}, with
    *         {@code 1.0f} indicating with extreme confidence that the actor is
-   *         a legitimate human user
+   *         a legitimate human user; {@code 0.0f} if the token was rejected
    */
   public float score(String token, String action, String ip) {
-    if(null == token || token.isBlank()) return 0f;
-    
+    return assess(token, action, ip).score();
+  }
+
+  /**
+   * Assesses the token provided in the reCAPTCHA response.
+   *
+   * <p>Reports everything the assessment said and decides nothing. Which part
+   * of the answer matters depends on how the key was created:
+   *
+   * <ul>
+   *   <li>a <strong>checkbox</strong> or <strong>score-based</strong> key
+   *       reports {@link Challenge#UNSPECIFIED} and is read by thresholding
+   *       {@link Verdict#score()};
+   *   <li>a <strong>policy-based challenge</strong> key is read by
+   *       {@link Verdict#challenge()}, where both {@link Challenge#PASSED} and
+   *       {@link Challenge#NOCAPTCHA} mean the policy engine was satisfied --
+   *       the second because it looked and decided not to challenge.
+   * </ul>
+   *
+   * @param token the token returned by the reCAPTCHA service
+   * @param action the action expected alongside the challenge, or {@code null}
+   *        to accept whichever action the token carries
+   * @param ip the IP address of the remote user (optional)
+   * @return what the assessment said
+   */
+  public Verdict assess(String token, String action, String ip) {
+    if(null == token || token.isBlank())
+      return Verdict.invalid("no token was supplied");
+
     logger.info(
         "analyzing reCAPTCHA token for user at {}",
         null == ip ? "unspecified IP address" : ip);
-    
+
     var eventBuilder = Event.newBuilder()
         .setSiteKey(siteKey)
         .setToken(token);
     if(null != ip)
       eventBuilder.setUserIpAddress(ip);
-    
+
     CreateAssessmentRequest request = CreateAssessmentRequest.newBuilder()
         .setParent(
             ProjectName.of(projectID).toString())
@@ -185,46 +291,46 @@ public class CAPTCHAValidator implements AutoCloseable {
                 .setEvent(eventBuilder.build())
                 .build())
         .build();
-    
+
     Assessment assessment = client.createAssessment(request);
-    
-    if(!assessment.getTokenProperties().getValid())
-      logger.error(
-          "failed to create assessment: {}",
-          assessment.getTokenProperties()
-              .getInvalidReason()
-              .name());
-    
-    else if(null != action
-        && !action.equals(assessment.getTokenProperties().getAction()))
+
+    if(!assessment.getTokenProperties().getValid()) {
+      String reason = assessment.getTokenProperties().getInvalidReason().name();
+      logger.error("failed to create assessment: {}", reason);
+      return Verdict.invalid(reason);
+    }
+
+    if(null != action && !action.equals(assessment.getTokenProperties().getAction())) {
       logger.error(
           "mismatched action: got \"{}\" but needed \"{}\"",
           assessment.getTokenProperties().getAction(),
           action);
-    
-    else {
-      
-      StringBuilder classificationSB = new StringBuilder();
-      for(ClassificationReason reason : assessment.getRiskAnalysis().getReasonsList()) {
-        if(!classificationSB.isEmpty())
-          classificationSB.append("; ");
-        classificationSB.append(reason.toString());
-      }
-      
-      var assessmentName = assessment.getName();
-      
-      logger.info(
-          "user at {} achieved risk score of {} on assessment {}{}",
-          null == ip ? "unspecified IP address" : ip,
-          assessment.getRiskAnalysis().getScore(),
-          assessmentName.substring(assessmentName.lastIndexOf("/") + 1),
-          classificationSB.isEmpty() ? "" : (": " + classificationSB.toString()));
-      
-      return assessment.getRiskAnalysis().getScore();
-      
+      return Verdict.invalid("action mismatch");
     }
-    
-    return 0f;
+
+    StringBuilder classificationSB = new StringBuilder();
+    for(ClassificationReason reason : assessment.getRiskAnalysis().getReasonsList()) {
+      if(!classificationSB.isEmpty())
+        classificationSB.append("; ");
+      classificationSB.append(reason.toString());
+    }
+
+    var assessmentName = assessment.getName();
+    Challenge challenge = challengeOf(assessment.getRiskAnalysis().getChallenge());
+
+    logger.info(
+        "user at {} achieved risk score of {} (challenge {}) on assessment {}{}",
+        null == ip ? "unspecified IP address" : ip,
+        assessment.getRiskAnalysis().getScore(),
+        challenge.name(),
+        assessmentName.substring(assessmentName.lastIndexOf("/") + 1),
+        classificationSB.isEmpty() ? "" : (": " + classificationSB.toString()));
+
+    return new Verdict(
+        true,
+        null,
+        assessment.getRiskAnalysis().getScore(),
+        challenge);
   }
 
   /**

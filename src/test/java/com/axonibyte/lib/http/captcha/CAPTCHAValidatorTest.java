@@ -23,7 +23,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import com.axonibyte.lib.http.captcha.CAPTCHAValidator.Challenge;
 import com.axonibyte.lib.http.captcha.CAPTCHAValidator.Credential;
+import com.axonibyte.lib.http.captcha.CAPTCHAValidator.Verdict;
 
 import org.testng.annotations.Test;
 
@@ -45,6 +47,60 @@ import org.testng.annotations.Test;
  * @author Caleb L. Power &lt;cpower@axonibyte.com&gt;
  */
 public class CAPTCHAValidatorTest {
+
+  // --- the policy verdict ---------------------------------------------------
+
+  /**
+   * The mapping onto Google's enum, which is the whole of what can be tested
+   * without an assessment on the other end.
+   */
+  @Test public void challengeValuesMapAcross() {
+    assertEquals(
+        CAPTCHAValidator.challengeOf(com.google.recaptchaenterprise.v1.RiskAnalysis.Challenge.PASSED),
+        Challenge.PASSED);
+    assertEquals(
+        CAPTCHAValidator.challengeOf(com.google.recaptchaenterprise.v1.RiskAnalysis.Challenge.FAILED),
+        Challenge.FAILED);
+    assertEquals(
+        CAPTCHAValidator.challengeOf(com.google.recaptchaenterprise.v1.RiskAnalysis.Challenge.NOCAPTCHA),
+        Challenge.NOCAPTCHA);
+  }
+
+  /**
+   * Anything this build does not recognise reads as UNSPECIFIED, which sends
+   * the caller to the score rather than to a guess.
+   *
+   * <p>UNRECOGNIZED is what protobuf hands back for a value added to the API
+   * after this client was built. It must not read as a pass -- that is a future
+   * Google release silently turning the CAPTCHA off.
+   */
+  @Test public void anUnknownChallengeIsNotAPass() {
+    assertEquals(
+        CAPTCHAValidator.challengeOf(
+            com.google.recaptchaenterprise.v1.RiskAnalysis.Challenge.CHALLENGE_UNSPECIFIED),
+        Challenge.UNSPECIFIED);
+    assertEquals(
+        CAPTCHAValidator.challengeOf(
+            com.google.recaptchaenterprise.v1.RiskAnalysis.Challenge.UNRECOGNIZED),
+        Challenge.UNSPECIFIED);
+    assertEquals(CAPTCHAValidator.challengeOf(null), Challenge.UNSPECIFIED);
+  }
+
+  /**
+   * A rejected token scores zero and decides nothing.
+   *
+   * <p>Both halves matter: a caller thresholding the score must fail it, and a
+   * caller reading the challenge must not see a pass.
+   */
+  @Test public void aRejectedTokenScoresZeroAndDecidesNothing() {
+    Verdict verdict = Verdict.invalid("MALFORMED");
+    assertEquals(verdict.tokenValid(), false);
+    assertEquals(verdict.score(), 0f);
+    assertEquals(verdict.challenge(), Challenge.UNSPECIFIED);
+    assertEquals(verdict.invalidReason(), "MALFORMED");
+  }
+
+  // --- credentials -----------------------------------------------------------
 
   @Test public void apiKeyLandsWhereGaxLooksForIt() throws IOException {
     var settings = CAPTCHAValidator.settingsFor(Credential.API_KEY, "AIzaSyExampleKey");
