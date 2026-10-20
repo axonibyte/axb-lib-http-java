@@ -9,7 +9,13 @@ apply plugin: 'com.github.johnrengelman.shadow'
 
 repositories {
   mavenCentral()
-  maven { url "https://jitpack.io" }
+
+  // The forge's own maven registry, replacing jitpack. jitpack built
+  // axb-lib-wildcard-java FROM GITHUB, which made the GitHub mirror
+  // load-bearing for this build rather than a courtesy; the forge serves what
+  // maven-publish put there, pom included, so transitives still resolve.
+  // Reads are anonymous for a public org, so no credential enters a build.
+  maven { url "https://forge.axonibyte.com/api/packages/axonibyte/maven" }
 }
 
 group = prjGroup
@@ -19,7 +25,7 @@ targetCompatibility = prjCompat
 
 dependencies {
   api 'com.sparkjava:spark-core:2.9.4'
-  implementation 'com.github.axonibyte:axb-lib-wildcard-java:0.0.1'
+  implementation 'com.axonibyte.lib.wildcard:axb-lib-wildcard-java:0.0.1'
   implementation 'com.google.cloud:google-cloud-recaptchaenterprise:3.90.0'
   implementation 'org.json:json:20231013'
   implementation 'org.slf4j:slf4j-api:2.0.9'
@@ -49,6 +55,27 @@ publishing {
   publications {
     maven(MavenPublication) {
       from components.java
+    }
+  }
+
+  // The forge is where artifacts go now. maven-publish stays -- it is what
+  // produces the POM, so a consumer gets this project's own dependencies
+  // transitively instead of a bare jar.
+  //
+  // CREDENTIALS COME FROM THE ENVIRONMENT AND ARE ABSENT LOCALLY ON PURPOSE:
+  // `gradle build` never touches this block, so a clone with no credential
+  // builds and tests exactly as CI does. Only `gradle publish` needs them, and
+  // in CI they are the axonibyte org secrets PACKAGE_USER / PACKAGE_TOKEN -- a
+  // real token, because the job's own token is answered 401 reqPackageAccess
+  // by the package registry (measured, run 344).
+  repositories {
+    maven {
+      name = "forge"
+      url = "https://forge.axonibyte.com/api/packages/axonibyte/maven"
+      credentials {
+        username = System.getenv("PACKAGE_USER") ?: ""
+        password = System.getenv("PACKAGE_TOKEN") ?: ""
+      }
     }
   }
 }
